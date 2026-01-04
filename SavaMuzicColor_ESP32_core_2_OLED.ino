@@ -12,16 +12,20 @@
 // 7	4.05 - 7.0 кГц	5.52 кГц	Высокие частоты, "блеск"	7000 / 23.83 ≈ 293
 // 8	7.01 - 12.2 кГц	9.6 кГц	Самый верх, "воздух"	12200 / 23.83 ≈ 511
 //************************************************************************
-#include <Wire.h>                                          // I2C
-#include <GOLED.h>                                         // библиотека дисплея OLED
+#include "SavaOLED_ESP32.h"                                // библиотека дисплея OLED
+#include "SavaGFX_OLED.h"                                  // библиотека графики для OLED
+#include "Fonts/SF_Font_P8.h"                              // шрифт 8px
+#include "Fonts/SF_Font_x2_P16.h"                          // шрифт 16px
 #include "esp_dsp.h"                                       // Подключаем основную библиотеку для цифровой обработки сигналов на ESP32
 #include <math.h>                                          // Подключаем математическую библиотеку для использования константы M_PI (число Пи)
 #include "esp_timer.h"
-#include <SavaTRIGGER.h>                                   // Библиотека тригеров.
+#include <SavaTrig.h>                                      // Библиотека тригеров
 #include <SavaTime.h>                                      // Библиотека таймеров
+#include <SavaButton.h>                                    // Библиотека кнопок
 #include <EEPROM.h>                                        // библиотека памяти
 #include <SavaLED_ESP32.h>
-GOLED<SSD1306_128x64, OLED_BUFFER, OLED_I2C> oled;         // объявляем дисплей
+SavaOLED_ESP32 oled(128, 64);                              // объявляем дисплей
+SavaGFX_OLED gfx(&oled);                                   // объявляем графику
 #define SAMPLES                 512 //1024                 // Количество семплов
 #define SAMPLING_FREQ           24400                      // Частота дискритизации
 #define AUDIO_IN_PIN            39                         // АЦП пин
@@ -35,15 +39,18 @@ GOLED<SSD1306_128x64, OLED_BUFFER, OLED_I2C> oled;         // объявляем
 #define IDLE_TIMEOUT            20000                      // Время отсутствия звука в мСек
 SavaLED_ESP32 strip;
 //****************************************************************************************
-const int BTN_PLUS_PIN = 5;                                   //кнопка плюс
-const int BTN_MINUS_PIN = 13;                                 //кнопка минус
-const int BTN_OK_PIN = 15;                                    //кнопка ок
+#define BTN_PLUS_PIN    5                                     // кнопка плюс
+#define BTN_MINUS_PIN   13                                    // кнопка минус
+#define BTN_OK_PIN      15                                    // кнопка ок
 const int NUM_EFFECTS = 6;                                    // Количество визуальных эффектов (0-5)
 const int NUM_BG_OPTIONS = 5;                                 // Количество опций фона (0-8)
 const int NUM_MENU_ITEMS = 5;                                 // колво пунктов меню
-SavaTRIGGER mytr_minus;                                       // тригер кнопки минус
-SavaTRIGGER mytr_ok;                                          // тригер кнопки ок
-SavaTRIGGER mytr_plus;                                        // тригер кнопки плюс
+SavaButton btn_minus;                                         // кнопка минус
+SavaButton btn_ok;                                            // кнопка ок
+SavaButton btn_plus;                                          // кнопка плюс
+SavaTrig trigRT_minus;                                        // триггер переднего фронта для минус
+SavaTrig trigRT_ok;                                           // триггер переднего фронта для OK
+SavaTrig trigRT_plus;                                         // триггер переднего фронта для плюс
 //****************************************************************************************
 // --- Настройки визуализации OLED ---
 // Диапазон для настройки плавности (FADE_SPEED).
@@ -55,8 +62,8 @@ int displayBarHeights[NUM_BANDS] = {0};                       // Массив д
 int peakBarHeights[NUM_BANDS] = {0};                          // Массив для хранения высоты пиковых индикаторов
 // --- Переменные для управления экранами OLED ---
 SavaTime menuTimeoutTimer;                                    // Создаем экземпляр таймера
-SavaTRIGGER menuExitTrigger;                                  // Триггер для отслеживания момента выхода из меню
-SavaTRIGGER channel_triggers[NUM_BANDS];
+SavaTrig menuExitTrigger;                                     // Триггер для отслеживания момента выхода из меню
+SavaTrig channel_triggers[NUM_BANDS];
 const uint32_t MENU_TIMEOUT = 5000;                           // 5 секунд бездействия окне меню
 bool FlagIDLE = false;
 SavaTime FPS_Timer;
@@ -111,7 +118,6 @@ const long DELTA_MIN_RANGE = 4000;
 // Начальный "потолок" для АРУ "дельты" при старте.
 const long DELTA_INITIAL_MAX = 8000;
 
-/*
 // Массивы для хранения истории и динамических порогов (используются только в ядре 0)
 long band_history[NUM_BANDS][N_FRAMES];
 long minLvlAvg[NUM_BANDS];
@@ -122,7 +128,6 @@ uint8_t bandPeakLevel[NUM_BANDS];
 uint8_t bandPeakCounter = 0;
 const uint8_t bandPeakDecay = 1; // Скорость падения пиков
 const uint8_t PEAK_FALL_AMOUNT = 5;//10; // Величина падения
-*/
 // Индивидуальный порог "тишины" для каждого из 8 каналов
 const long noise_thresholds_by_band[NUM_BANDS] = {
   20000,  // Макс. шум был ~19355
@@ -246,58 +251,22 @@ void effect_Stars();
 //*****************************************************************************************
 void Vizual_OLED(BandData* band_data_copy) {
 
-    // --- Геометрия ---
-    const int AREA_X_START = 1;
-    const int AREA_Y_END = 63;
-    const int DRAWABLE_HEIGHT = 64;
-    const int BAR_WIDTH = 14;
-    const int SLOT_WIDTH = 16;
-    
-    // --- Массив для затухания "тела" (остается здесь) ---
-    static int displayBarHeights[NUM_BANDS] = {0};
+    // --- Подготовка массива уровней для SavaGFX эквалайзера ---
+    static uint8_t levels[NUM_BANDS] = {0};
 
-    // --- Логика расчета высот "тела" (пики больше не считаем) ---
     for (int i = 0; i < NUM_BANDS; i++) {
-      // 1. "Целевая" высота из .level (0-255)
-      float barRealHeight = map(band_data_copy[i].level, 0, 255, 0, DRAWABLE_HEIGHT);
-      
-      // 2. Логика затухания "тела" (как и раньше)
-      if (barRealHeight > displayBarHeights[i]) {
-        displayBarHeights[i] = barRealHeight;
-      } else {
-        displayBarHeights[i] -= FADE_SPEED; 
-        if (displayBarHeights[i] < 0) displayBarHeights[i] = 0;
-      }
+        levels[i] = band_data_copy[i].level;  // Копируем уровни (0-255)
     }
 
     // --- Отрисовка с контролем FPS ---
-    if (FPS_Timer.GenML(25)) {
+    if (FPS_Timer.Gen(25)) {  // Изменено: GenML() -> Gen()
         oled.clear();
-        
-        for (int i = 0; i < NUM_BANDS; i++) {
-            int x_start = AREA_X_START + (i * SLOT_WIDTH);
-            int x_end = x_start + BAR_WIDTH - 1;
 
-            // --- Рисуем "тело" ---
-            int height_to_draw = (int)displayBarHeights[i];
-            for (int y = AREA_Y_END; y >= AREA_Y_END - height_to_draw + 1; y -= 2) {
-                oled.line(x_start, y, x_end, y, OLED_STROKE);
-            }
+        // Используем готовый эквалайзер из SavaGFX_OLED
+        // peaks=true, peakDecaySpeed=10 (100ms на уровень)
+        gfx.equalizer8(levels, true, 10);
 
-            // --- Рисуем "пик", используя ГОТОВЫЕ данные из peakLevel ---
-            // Масштабируем .peakLevel (0-255) в высоту дисплея
-            int peak_height_to_draw = map(band_data_copy[i].peakLevel, 0, 255, 0, DRAWABLE_HEIGHT);
-            
-            if (peak_height_to_draw > 0) {
-                int peak_y = AREA_Y_END - peak_height_to_draw + 1;
-                // Рисуем пик, только если он "оторвался" от тела
-                if (peak_height_to_draw > height_to_draw) {
-                    oled.line(x_start, peak_y, x_end, peak_y, OLED_STROKE);
-                }
-            }
-        }
-        
-        oled.update();
+        oled.display();  // Изменено: update() -> display()
     }
 }
 //*****************************************************************************************
@@ -306,11 +275,11 @@ void Vizual_OLED(BandData* band_data_copy) {
 void Menu_OLED() {
     // --- Шаг 1: Очищаем экран и устанавливаем шрифт ---
     oled.clear();
-    oled.setScale(2); // Крупный шрифт для меню
+    oled.font(SF_Font_x2_P16); // Крупный шрифт 16px для меню
 
     // --- Шаг 2: Отрисовка названия параметра ---
-    oled.setCursorXY(10, 8); // Отступ слева, верхняя половина экрана
-    
+    oled.cursor(0, 8, StrCenter);
+
     switch (currentMenuItem) {
         case MENU_BRIGHTNESS:   oled.print("Яркость");   break;
         case MENU_EFFECT:       oled.print("Эффект");      break;
@@ -318,9 +287,10 @@ void Menu_OLED() {
         case MENU_BACKGROUND:   oled.print("Фон");         break;
         case MENU_SMOOTH:       oled.print("Плавность");  break;
     }
+    oled.drawPrint(); // ОБЯЗАТЕЛЬНО после print()
 
     // --- Шаг 3: Отрисовка значения параметра ---
-    oled.setCursorXY(10, 40); // Отступ слева, нижняя половина экрана
+    oled.cursor(0, 40, StrCenter);
 
     switch (currentMenuItem) {
         case MENU_BRIGHTNESS:
@@ -350,34 +320,35 @@ void Menu_OLED() {
             oled.print("%");
             break;
     }
+    oled.drawPrint(); // ОБЯЗАТЕЛЬНО после print()
 
     // --- Шаг 4: Обновляем физический экран ---
-    oled.update();
+    oled.display();  // Изменено: update() -> display()
 }
 //*****************************************************************************************
 // --- Функция отрисовки меню на OLED дисплее ---
 //*****************************************************************************************
-void IDLE_OLED(){ 
+void IDLE_OLED(){
     oled.clear();
-    oled.setScale(2);
-    oled.setCursorXY(0, 28);
+    oled.font(SF_Font_x2_P16); // Крупный шрифт 16px
+    oled.cursor(0, 28, StrCenter);
     oled.print("ТИШИНА");
-    oled.update();
+    oled.drawPrint(); // ОБЯЗАТЕЛЬНО после print()
+    oled.display();  // Изменено: update() -> display()
 }
 //*****************************************************************************************
 // ---управление кнопками---
 //*****************************************************************************************
 bool buttonsH(){
-  
-  bool butPlus = false;
-  bool butMinus = false;
-  bool butOk = false;
-  if(mytr_minus.Rtr(!digitalRead (BTN_MINUS_PIN))) butMinus = true;  
-  if(mytr_plus.Rtr(!digitalRead (BTN_PLUS_PIN))) butPlus = true;
-  if(mytr_ok.Rtr(!digitalRead (BTN_OK_PIN))) butOk = true;
-    // Обрабатываем логику только если меню активно!
-  if (menuTimeoutTimer.TOF(MENU_TIMEOUT)) {
-    //bool settingsChanged = false;
+
+  bool butMinus = trigRT_minus.RT(btn_minus.read());
+  bool butPlus = trigRT_plus.RT(btn_plus.read());
+  bool butOk = trigRT_ok.RT(btn_ok.read());
+  bool anyButton = butMinus || butPlus || butOk;
+
+  // Обрабатываем логику только если меню активно!
+  // TOF теперь требует input: anyButton продлевает таймер
+  if (menuTimeoutTimer.TOF(MENU_TIMEOUT, anyButton)) {
     if(butOk){
       currentMenuItem = (MenuItem)((currentMenuItem + 1) % NUM_MENU_ITEMS);
     }
@@ -387,17 +358,16 @@ bool buttonsH(){
          if (currentSettings.brightness < 95) currentSettings.brightness += 5;
           else currentSettings.brightness = 100;
           break;
-        case MENU_EFFECT: currentSettings.currentEffect = (currentSettings.currentEffect + 1) % NUM_EFFECTS; 
+        case MENU_EFFECT: currentSettings.currentEffect = (currentSettings.currentEffect + 1) % NUM_EFFECTS;
         break;
         case MENU_SENSITIVITY: if (currentSettings.sensitivity < 100) currentSettings.sensitivity += 10;
         break;
-        case MENU_BACKGROUND: currentSettings.backgroundColor = (currentSettings.backgroundColor + 1) % NUM_BG_OPTIONS; 
+        case MENU_BACKGROUND: currentSettings.backgroundColor = (currentSettings.backgroundColor + 1) % NUM_BG_OPTIONS;
         break;
         case MENU_SMOOTH:
           if (currentSettings.smooth < 100) currentSettings.smooth += 10;
         break;
         }
-      //settingsChanged = true;
     }
     if (butMinus) {
       switch (currentMenuItem) {
@@ -420,13 +390,12 @@ bool buttonsH(){
           if (currentSettings.smooth > 0) currentSettings.smooth -= 10;
         break;
       }
-      //settingsChanged = true;
     }
     strip.setBrightness(map(currentSettings.brightness,50,100,127,255));
-    SetSensitivity = map(currentSettings.sensitivity,0,100,80000,1); 
+    SetSensitivity = map(currentSettings.sensitivity,0,100,80000,1);
   }
-  
-  return (butMinus || butPlus || butOk);
+
+  return anyButton;
 }
 //*****************************************************************************************
 // --- Функции записи в EEPROM ---
@@ -497,34 +466,39 @@ void IRAM_ATTR sampling_timer_callback(void* arg) {
 //****************************************************************************************
 void setup() {
   
-  pinMode(BTN_MINUS_PIN, INPUT);
-  pinMode(BTN_OK_PIN, INPUT);
-  pinMode(BTN_PLUS_PIN, INPUT);
+  // --- Инициализация кнопок через SavaButton ---
+  btn_minus(BTN_MINUS_PIN, PLUS);  // GPIO13, подтяжка к плюсу
+  btn_ok(BTN_OK_PIN, PLUS);        // GPIO15, подтяжка к плюсу
+  btn_plus(BTN_PLUS_PIN, PLUS);    // GPIO5, подтяжка к плюсу
+
   analogReadResolution(12);
   analogSetAttenuation(ADC_11db);
   Serial.begin(115200);
+
   // --- ИНИЦИАЛИЗАЦИЯ И ЗАГРУЗКА НАСТРОЕК ---
   EEPROM.begin(EEPROM_SIZE);
   loadSettings();
-  // -----------------------------------------
-  Wire.begin();                                            //инит I2C
-  Wire.setClock(800000L);                                  //увеличиваем скорость I2C
-  oled.init();                                             //инит OLED
-  oled.clear();                                            //стереть экран
-  oled.setCursorXY(18, 14);
-  oled.setScale(4);
-  oled.textMode(BUF_ADD);
+
+  // --- Инициализация OLED (I2C автоматически настраивается) ---
+  oled.init(800000, 21, 22);  // 800kHz, SDA=21, SCL=22 (стандарт ESP32)
+  oled.clear();
+
+  // --- Заставка SAVA ---
+  oled.font(SF_Font_x2_P16);       // Крупный шрифт (16px недостаточно для scale(4), но покажем)
+  oled.cursor(0, 28, StrCenter);    // Позиция для текста
+  oled.drawMode(ADD_UP);           // Режим наложения
   oled.print("SAVA");
-  oled.roundRect(0, 0, 127, 63, OLED_STROKE);
-  oled.update();                                           //Обновить экран
+  oled.drawPrint();
+  oled.rectR(0, 0, 127, 63, 3, REPLACE);  // Прямоугольник со скруглением r=3
+  oled.display();
   delay(3000);
   oled.clear();
+
+  // --- Инициализация LED ленты ---
   if (!strip.begin(NUM_LEDS, LED_PIN)) {
     while (true);
   }
   strip.setGammaCorrection(true);
-  //strip.setBrightness(currentSettings.brightness);
-  buttonsH();
   // --- Инициализация библиотеки esp-dsp ---
   // Выполняется один раз для подготовки внутренних таблиц, что ускоряет FFT.
   esp_err_t ret = dsps_fft2r_init_fc32(NULL, CONFIG_DSP_MAX_FFT_SIZE);
@@ -664,27 +638,24 @@ void loop() {
   for (int i = 0; i < NUM_BANDS; i++) {
     totalLevelForIdleCheck += band_data_copy[i].level;
   }
-  
+
   // Порог теперь в единицах 0-255. Если суммарный уровень всех каналов
   // больше, например, 50, считаем, что звук есть.
-  const int IDLE_LEVEL_THRESHOLD = 50; 
-  if (totalLevelForIdleCheck > IDLE_LEVEL_THRESHOLD) {
-      idleTimer.TRes(); 
-  }
+  const int IDLE_LEVEL_THRESHOLD = 50;
+  bool soundPresent = (totalLevelForIdleCheck > IDLE_LEVEL_THRESHOLD);
 
-  // --- ЭТАП 2: Обработка кнопок и управление таймером ---
-  if (buttonsH()) {
-    menuTimeoutTimer.TRes();
-  }
+  // --- ЭТАП 2: Обработка кнопок (возвращает true если ЛЮБАЯ кнопка нажата) ---
+  bool anyButtonPressed = buttonsH();
 
   // --- ЭТАП 3: Логика отображения и сохранения ---
   // Проверяем, должны ли мы быть в меню ПРЯМО СЕЙЧАС
-  bool isMenuNow = menuTimeoutTimer.TOF(MENU_TIMEOUT);
+  // НЕ инвертируем! TOF теперь сам управляет логикой
+  bool isMenuNow = menuTimeoutTimer.TOF(MENU_TIMEOUT, anyButtonPressed);
 
-  // Используем триггер заднего фронта (Ftr) для отлова момента,
+  // Используем триггер заднего фронта (FT) для отлова момента,
   // когда isMenuNow переключается из 'true' (были в меню) в 'false' (вышли из меню).
-  // Ftr вернет true только ОДИН РАЗ в этот самый момент.
-  if (menuExitTrigger.Ftr(isMenuNow)) {
+  // FT вернет true только ОДИН РАЗ в этот самый момент.
+  if (menuExitTrigger.FT(isMenuNow)) {
     saveSettings(); // Сохраняем настройки ТОЛЬКО В МОМЕНТ ВЫХОДА из меню
     Serial.println("--- SETTINGS SAVED ---"); // Отладочное сообщение
   }
@@ -698,7 +669,7 @@ void loop() {
 
   if (currentSettings.currentEffect == 5) { // 5 - это "Авто"
     // Мы в режиме автопереключения
-    if (autoCycleTimer.GenML(TIMERAUTOCYCLE)) {
+    if (autoCycleTimer.Gen(TIMERAUTOCYCLE)) {  // Изменено: GenML() -> Gen()
         // Прошло 3 секунды, переключаем на следующий эффект
         auto_effect_index = (auto_effect_index + 1) % 5; // 5 "реальных" эффектов
     }
@@ -708,13 +679,12 @@ void loop() {
     effect_to_draw = currentSettings.currentEffect;
     // Сбрасываем таймер и счетчик авто-режима, чтобы при следующем входе
     // в "Авто" он начал с первого эффекта и полного интервала.
-    autoCycleTimer.TRes(); 
+    autoCycleTimer.Reset();  // Изменено: TRes() -> Reset()
     auto_effect_index = 0;
   }
-   
-  // TOF() возвращает true, ПОКА таймер еще не истек.
-  
-  if (idleTimer.TOF(IDLE_TIMEOUT)) {
+
+  // TOF с soundPresent: пока звук есть ИЛИ не прошло 20 сек БЕЗ звука -> активен
+  if (idleTimer.TOF(IDLE_TIMEOUT, soundPresent)) {
     FlagIDLE = false;
     if (strip.canShow()) {
 
@@ -948,7 +918,7 @@ void spawnSparks(BandData* band_data) {
   const uint8_t SPAWN_THRESHOLD = 15; 
 
   for (int i = 0; i < NUM_BANDS; i++) {
-    if (channel_triggers[i].Rtr(band_data[i].isNewPeak) && band_data[i].level > SPAWN_THRESHOLD) {
+    if (channel_triggers[i].RT(band_data[i].isNewPeak) && band_data[i].level > SPAWN_THRESHOLD) {  // Изменено: Rtr() -> RT()
       for (int j = 0; j < N_SPARKS; j++) {
         if (!sparks[j].active) {
           
@@ -1013,7 +983,7 @@ void spawnStars(BandData* band_data) {
   // Проходим по всем 8 каналам
   for (int i = 0; i < NUM_BANDS; i++) {
     // Если триггер сработал на новый пик...
-    if (channel_triggers[i].Rtr(band_data[i].isNewPeak) && band_data[i].level > SPAWN_THRESHOLD) {
+    if (channel_triggers[i].RT(band_data[i].isNewPeak) && band_data[i].level > SPAWN_THRESHOLD) {  // Изменено: Rtr() -> RT()
       
       // ...ищем свободный слот для новой звезды
       for (int j = 0; j < MAX_STARS; j++) {
