@@ -33,6 +33,9 @@ SavaGFX_OLED gfx(&oled);                                   // объявляем
 #define IDLE_TIMEOUT            20000                      // Время отсутствия звука в мСек
 #define GATE_TON_MS             200                        // Задержка включения канала (фильтр импульсов)
 #define GATE_TOF_MS             350                        // Задержка выключения канала (удержание)
+#define SPEECH_DETECT_TIMEOUT   1000                       // Задержка детекции речи (мс)
+#define SPEECH_HF_THRESHOLD     50                         // Порог высоких каналов (5-7), речь < 50
+#define SPEECH_LF_MIN           120                         // Минимальная активность низких каналов (0-4)
 SavaLED_ESP32 strip;
 //****************************************************************************************
 #define BTN_PLUS_PIN    5                                     // кнопка плюс
@@ -533,6 +536,9 @@ void TaskFFTcode(void * pvParameters) {
     static SavaTime gateTimerTOF[NUM_BANDS];
     static bool channelGateActive[NUM_BANDS] = {false};
 
+    // === ДЕТЕКТОР РЕЧИ ===
+    static SavaTime speechTimer;
+
     // === МАССИВ ДЛЯ ОТПРАВКИ В ОЧЕРЕДЬ ===
     BandData band_data[NUM_BANDS];
 
@@ -678,7 +684,37 @@ void TaskFFTcode(void * pvParameters) {
             }
 
             // ============================================================
-            // ШАГ 11: ОТПРАВКА ДАННЫХ В ЯДРО 1
+            // ШАГ 11: ДЕТЕКТОР РЕЧИ (обнуление каналов при детекции речи)
+            // ============================================================
+
+            // Сумма высоких каналов (5, 6, 7)
+            uint16_t high_sum = (band_data[5].level + band_data[6].level + band_data[7].level) / 3;
+
+            // Сумма низких/средних каналов (0-4)
+            uint16_t low_sum = (band_data[0].level + band_data[1].level + band_data[2].level + band_data[3].level + band_data[4].level) / 5;
+            Serial.print("Низкие_sum: = ");Serial.println(low_sum);
+            Serial.print("высокие_sum: = ");Serial.println(high_sum);
+            // Речь = высокие почти нулевые И есть активность в низких
+            bool isSpeech = false;
+            if((high_sum < SPEECH_HF_THRESHOLD) && (low_sum > SPEECH_LF_MIN)) {
+              isSpeech = true;
+              Serial.print("детектор сработал");
+
+              }
+            else isSpeech = false;
+            
+            // Таймер речи: если речь держится > SPEECH_DETECT_TIMEOUT → обнуляем все каналы
+            if (speechTimer.TON(SPEECH_DETECT_TIMEOUT, isSpeech)) {
+                // Детектирована речь → обнуляем все уровни
+                Serial.print("Обнуление каналов из-за речи");
+                for (int i = 0; i < NUM_BANDS; i++) {
+                    band_data[i].level = 0;
+                    band_data[i].isNewPeak = false;
+                }
+            }
+
+            // ============================================================
+            // ШАГ 12: ОТПРАВКА ДАННЫХ В ЯДРО 1
             // ============================================================
             xQueueOverwrite(peaksQueue, &band_data);
         }
