@@ -31,6 +31,8 @@ SavaGFX_OLED gfx(&oled);                                   // объявляем
 #define BACKGROUND_BRIGHTNESS   40                         // яркость фона
 #define TIMERAUTOCYCLE          3000                       // таймер переключения эффектов в мСек
 #define IDLE_TIMEOUT            20000                      // Время отсутствия звука в мСек
+#define GATE_TON_MS             200                        // Задержка включения канала (фильтр импульсов)
+#define GATE_TOF_MS             350                        // Задержка выключения канала (удержание)
 SavaLED_ESP32 strip;
 //****************************************************************************************
 #define BTN_PLUS_PIN    5                                     // кнопка плюс
@@ -526,6 +528,11 @@ void TaskFFTcode(void * pvParameters) {
     // === ДЕТЕКТОРЫ АТАКИ ===
     static uint8_t last_level[NUM_BANDS] = {0};
 
+    // === GATE ФИЛЬТР (TON/TOF для каждого канала) ===
+    static SavaTime gateTimerTON[NUM_BANDS];
+    static SavaTime gateTimerTOF[NUM_BANDS];
+    static bool channelGateActive[NUM_BANDS] = {false};
+
     // === МАССИВ ДЛЯ ОТПРАВКИ В ОЧЕРЕДЬ ===
     BandData band_data[NUM_BANDS];
 
@@ -540,17 +547,17 @@ void TaskFFTcode(void * pvParameters) {
     // === КОНСТАНТЫ FFT ===
     const int start_bin_freq = 2;                                         // 150 Гц / 95.3 Гц/бин ≈ 1.57 → 2
     const float MIN_AMPLITUDE[] = {
-                                  8600.0f, 
-                                  8100.0f, 
-                                  5000.0f, 
-                                  5000.0f,
+                                  6000.0f, //8600.0f, 
+                                  6000.0f, //8100.0f, 
+                                  2000.0f, //5000.0f, 
+                                  2200.0f, //5000.0f,
+                                  2000.0f, //2000.0f,
+                                  1000.0f, //8000.0f,
                                   2000.0f,
-                                  8000.0f,
-                                  2000.0f,
-                                  200.0f};                                   
+                                  600.0f};                                   
     const float MAX_AMPLITUDE[] = {
-                                  55000.0f, 
-                                  50000.0f, 
+                                  45000.0f, 
+                                  40000.0f, 
                                   40000.0f, 
                                   40000.0f,
                                   30000.0f,
@@ -644,7 +651,26 @@ void TaskFFTcode(void * pvParameters) {
                 uint8_t current_level = (uint8_t)mapped_value;
 
                 // ============================================================
-                // ШАГ 9: ДЕТЕКЦИЯ АТАКИ (резкий скачок уровня)
+                // ШАГ 9: GATE ФИЛЬТР (TON/TOF для подавления импульсов)
+                // ============================================================
+
+                // TON: Включаем gate если уровень > 0 держится GATE_TON_MS
+                if (gateTimerTON[i].TON(GATE_TON_MS, (current_level > 0))) {
+                    channelGateActive[i] = true;
+                }
+
+                // TOF: Выключаем gate если уровень == 0 держится GATE_TOF_MS
+                if (!gateTimerTOF[i].TOF(GATE_TOF_MS, (current_level > 0))) {
+                    channelGateActive[i] = false;
+                }
+
+                // Если gate выключен, обнуляем выход
+                if (!channelGateActive[i]) {
+                    current_level = 0;
+                }
+
+                // ============================================================
+                // ШАГ 10: ДЕТЕКЦИЯ АТАКИ (резкий скачок уровня)
                 // ============================================================
                 band_data[i].isNewPeak = (current_level > last_level[i] + ATTACK_THRESHOLD);
                 band_data[i].level = current_level;
@@ -652,7 +678,7 @@ void TaskFFTcode(void * pvParameters) {
             }
 
             // ============================================================
-            // ШАГ 10: ОТПРАВКА ДАННЫХ В ЯДРО 1
+            // ШАГ 11: ОТПРАВКА ДАННЫХ В ЯДРО 1
             // ============================================================
             xQueueOverwrite(peaksQueue, &band_data);
         }
