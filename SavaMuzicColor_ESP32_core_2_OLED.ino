@@ -1,32 +1,26 @@
-//************************************************************************
-// Диапазон частот (Гц): С учетом вашего требования "без перекрытий".
-// Центральная частота (Гц): Середина диапазона, как вы и просили.
-// Границы в "бинах" FFT: Самое важное для реализации в коде. (Напомню, 1 бин ≈ 23.83 Гц).
-// Канал	Диапазон частот (Гц)	Центральная частота (Гц)	Описание	Верхняя граница (в "бинах" FFT)
-// 1	150 - 259 Гц	205 Гц	Глубокий бас	259 / 23.83 ≈ 10
-// 2	260 - 449 Гц	355 Гц	Основной бас, "тело" звука	449 / 23.83 ≈ 18
-// 3	450 - 779 Гц	615 Гц	Низкая середина, теплота	779 / 23.83 ≈ 32
-// 4	780 - 1349 Гц (1.3 кГц)	1065 Гц	Середина, основа инструментов	1349 / 23.83 ≈ 56
-// 5	1.35 - 2.33 кГц	1.84 кГц	Верхняя середина, разборчивость	2330 / 23.83 ≈ 97
-// 6	2.34 - 4.04 кГц	3.19 кГц	"Присутствие", яркость	4040 / 23.83 ≈ 169
-// 7	4.05 - 7.0 кГц	5.52 кГц	Высокие частоты, "блеск"	7000 / 23.83 ≈ 293
-// 8	7.01 - 12.2 кГц	9.6 кГц	Самый верх, "воздух"	12200 / 23.83 ≈ 511
-//************************************************************************
+/*
+//***********************************************************************
+// SavaMuzicColor_ESP32_core_2_OLED.ino
+// Версия 2.0.0
+// Автор: SavaLab
+// https://github.com/sava-74/SavaMuzicColor_ESP32_core_2_OLED.git
+//***********************************************************************
+*/
 #include "SavaOLED_ESP32.h"                                // библиотека дисплея OLED
 #include "SavaGFX_OLED.h"                                  // библиотека графики для OLED
 #include "Fonts/SF_Font_P8.h"                              // шрифт 8px
 #include "Fonts/SF_Font_x2_P16.h"                          // шрифт 16px
 #include "esp_dsp.h"                                       // Подключаем основную библиотеку для цифровой обработки сигналов на ESP32
 #include <math.h>                                          // Подключаем математическую библиотеку для использования константы M_PI (число Пи)
-#include "esp_timer.h"
+#include "esp_timer.h"                                     // Подключаем библиотеку для работы с высокоточным таймером ESP32
 #include <SavaTrig.h>                                      // Библиотека тригеров
 #include <SavaTime.h>                                      // Библиотека таймеров
 #include <SavaButton.h>                                    // Библиотека кнопок
 #include <EEPROM.h>                                        // библиотека памяти
-#include <SavaLED_ESP32.h>
+#include <SavaLED_ESP32.h>                                 // библиотека управления светодиодной лентой
 SavaOLED_ESP32 oled(128, 64);                              // объявляем дисплей
 SavaGFX_OLED gfx(&oled);                                   // объявляем графику
-#define SAMPLES                 512 //1024                 // Количество семплов
+#define SAMPLES                 256                        // Количество семплов (уменьшено для скорости)
 #define SAMPLING_FREQ           24400                      // Частота дискритизации
 #define AUDIO_IN_PIN            39                         // АЦП пин
 #define LED_PIN                 14                         // WS2912 пин
@@ -57,7 +51,7 @@ SavaTrig trigRT_plus;                                         // триггер 
 const float SMOOTH_MIN_SPEED = 4.0f;                          // Максимальная скорость падения (при 0% плавности).
 const float SMOOTH_MAX_SPEED = 0.5f;                          // Минимальная скорость падения (при 100% плавности).
 const float PEAK_FADE_SPEED = 0.2f;                           // Скорость падения пиковых индикаторов. Чем БОЛЬШЕ значение, тем БЫСТРЕЕ падают.
-const float FADE_SPEED = 2.0f; // <<< ВОЗВРАЩАЕМ КОНСТАНТУ. Чем БОЛЬШЕ, тем БЫСТРЕЕ падают.
+const float FADE_SPEED = 2.0f;                                // <<< ВОЗВРАЩАЕМ КОНСТАНТУ. Чем БОЛЬШЕ, тем БЫСТРЕЕ падают.
 int displayBarHeights[NUM_BANDS] = {0};                       // Массив для хранения текущей "видимой" высоты столбиков (для плавного затухания)
 int peakBarHeights[NUM_BANDS] = {0};                          // Массив для хранения высоты пиковых индикаторов
 // --- Переменные для управления экранами OLED ---
@@ -65,17 +59,16 @@ SavaTime menuTimeoutTimer;                                    // Создаем 
 SavaTrig menuExitTrigger;                                     // Триггер для отслеживания момента выхода из меню
 SavaTrig channel_triggers[NUM_BANDS];
 const uint32_t MENU_TIMEOUT = 5000;                           // 5 секунд бездействия окне меню
-bool FlagIDLE = false;
-SavaTime FPS_Timer;
-const float band_gain_factors[8] = {1.5f, 0.4f, 0.6f, 0.9f, 1.3f, 1.0f, 1.1f, 20.9f}; //усилениеие, ослабление по каналам
-uint32_t SetSensitivity;
+bool FlagIDLE = false;                                        // Флаг бездействия
+SavaTime FPS_Timer;                                           // Таймер для контроля FPS
+// band_gain_factors НЕ ИСПОЛЬЗУЮТСЯ в новом коде (можем добавить потом если нужно)
 //***************************************************************************************
 const uint32_t channel_colors[NUM_BANDS] = {
-  //RED, ORANGE, YELLOW, BLUE, CYAN, SKYBLUE, LIME, GREEN      // Цвета для каналов
+  //RED, ORANGE, YELLOW, BLUE, CYAN, SKYBLUE, LIME, GREEN     // Цвета для каналов
   RED,GREEN,WHITE,YELLOW,BLUE,ORANGE,LIME,CYAN
   };
 const uint32_t backgr_colors[NUM_BG_OPTIONS] = {
-  LIME, RED, BLUE, WHITE, BLACK                           // 4 цвета + "Выкл"
+  LIME, RED, BLUE, WHITE, BLACK                               // 4 цвета + "Выкл"
   };
 const uint8_t backgr_colors_rgb[NUM_BG_OPTIONS][3] = {
   {  0, 255,   0}, // 0: LIME
@@ -89,313 +82,303 @@ SavaTime idleTimer;                                           // создани�
 //****************************************************************************************
 SavaTime autoCycleTimer;                                      //создание тамера переключения эффектов в режиме авто
 //****************************************************************************************
-QueueHandle_t peaksQueue; // Наша очередь для передачи данных
+QueueHandle_t peaksQueue;                                     // Наша очередь для передачи данных
 // --- Переменные, используемые только на ядре 0 ---
-esp_timer_handle_t sampling_timer;
+esp_timer_handle_t sampling_timer;                            // Таймер для сбора семплов  
 portMUX_TYPE isrMux = portMUX_INITIALIZER_UNLOCKED;           // portMUX для ISR, он легковеснее
-volatile uint16_t raw_samples[SAMPLES];
-volatile uint16_t sample_index = 0;
-volatile bool samplesReadyFlag = false;                       // Текущий индекс в буфере raw_samples
+volatile uint16_t raw_samples[SAMPLES];                       // Буфер для сырых семплов
+volatile uint16_t sample_index = 0;                           // Текущий индекс в буфере raw_samples
+volatile bool samplesReadyFlag = false;                       // Флаг готовности данных
 //****************************************************************************************
-//const int band_max_bin[8] = {10, 18, 32, 56, 97, 169, 293, 511};  // Массив с верхними границами каждого из 8 каналов в "бинах" FFT. 1024
-const int band_max_bin[8] = {5, 7, 14, 28, 56, 112, 224, 255};  // Массив с верхними границами каждого из 8 каналов в "бинах" FFT. 512
+// Разрешение FFT: 24400 / 256 = 95.3 Гц/бин
+// Канал 1: 150-259 Гц   → бины 2-3   (150/95.3=1.57, 259/95.3=2.72)
+// Канал 2: 260-449 Гц   → бины 3-5   (260/95.3=2.73, 449/95.3=4.71)
+// Канал 3: 450-779 Гц   → бины 5-8   (450/95.3=4.72, 779/95.3=8.17)
+// Канал 4: 780-1349 Гц  → бины 9-14  (780/95.3=8.18, 1349/95.3=14.15)
+// Канал 5: 1350-2330 Гц → бины 15-24 (1350/95.3=14.16, 2330/95.3=24.45)
+// Канал 6: 2340-4040 Гц → бины 25-42 (2340/95.3=24.55, 4040/95.3=42.39)
+// Канал 7: 4050-7000 Гц → бины 43-73 (4050/95.3=42.50, 7000/95.3=73.45)
+// Канал 8: 7010-12200 Гц→ бины 74-127(7010/95.3=73.55, 12200/95.3=128.01, макс 127)
+const int band_max_bin[8] = {3, 5, 8, 14, 24, 42, 73, 127};  // Верхние границы для 256 семплов @ 24400 Гц
 //****************************************************************************************
-// --- Настройки чувствительности ---
-//const long MIN_AMPLITUDE = 10000;                             // Минимальная амплитуда (порог шума, статичный).
-//*****************************************************************************************
-// --- Переменные и константы для АРУ и фильтрации ---
-//*****************************************************************************************
-long AnalogVolume; // Аналоговое значение входное отфильтрованное по нижнему уровню
-const int N_FRAMES = 5; // Количество кадров для усреднения в АРУ
-
-// Порог "дельты", ниже которого изменение считается шумом.
-// Значения гораздо ниже, т.к. мы работаем с разницей, а не абсолютным уровнем.
-const long DELTA_THRESHOLD = 500;
-
-// Минимальная ширина диапазона для АРУ "дельты".
-const long DELTA_MIN_RANGE = 4000;
-
-// Начальный "потолок" для АРУ "дельты" при старте.
-const long DELTA_INITIAL_MAX = 8000;
-
-// Массивы для хранения истории и динамических порогов (используются только в ядре 0)
-long band_history[NUM_BANDS][N_FRAMES];
-long minLvlAvg[NUM_BANDS];
-long maxLvlAvg[NUM_BANDS];
-
-// Переменные для "липких" пиков
-uint8_t bandPeakLevel[NUM_BANDS];
-uint8_t bandPeakCounter = 0;
-const uint8_t bandPeakDecay = 1; // Скорость падения пиков
-const uint8_t PEAK_FALL_AMOUNT = 5;//10; // Величина падения
-// Индивидуальный порог "тишины" для каждого из 8 каналов
-const long noise_thresholds_by_band[NUM_BANDS] = {
-  20000,  // Макс. шум был ~19355
-  17000,   // Макс. шум был ~6768
-  13000,   // Макс. шум был ~4615
-  6000,   // Макс. шум был ~5929
-  3000,   // Макс. шум был ~2507
-  3000,   // Макс. шум был ~2507 (ошибка в предыдущем анализе)
-  3500,   // Макс. шум был ~1338
-  2500    // Макс. шум был ~931
-};
-/*
-// Минимальная ширина динамического диапазона для каждого канала.
-// Предотвращает "зашкаливание" на тихих звуках.
-const long min_range_by_band[NUM_BANDS] = {
-  70000,   // Канал 1
-  100000,  // Канал 2
-  80000,   // Канал 3
-  30000,   // Канал 4
-  35000,   // Канал 5
-  30000,   // Канал 6
-  45000,   // Канал 7
-  5000    // Канал 8
-};
-
-// Начальный "потолок" для АРУ при старте программы.
-const long initial_max_lvl_by_band[NUM_BANDS] = {
-  90000,   // Канал 1
-  380000,  // Канал 2
-  100000,  // Канал 3
-  40000,   // Канал 4
-  45000,   // Канал 5
-  35000,   // Канал 6
-  50000,   // Канал 7
-  40000    // Канал 8
-};*/
+// --- Настройки обработки FFT в ядре 0 ---
+//****************************************************************************************
+// Порог детекции атаки (резкий скачок уровня для детектора isNewPeak)
+// 25 = ~10% от максимума (255), оптимально для фильтрации шума
+#define ATTACK_THRESHOLD 25
 // =========================================================================
 // --- Структура для передачи обработанных данных между ядрами ---
 // =========================================================================
-struct BandData {
-  uint8_t level;     // Нормализованный уровень для этого канала (0-255)
-  uint8_t peakLevel; // Уровень "липкого" пика для этого канала (0-255)
-  bool isNewPeak;    // Флаг: был ли в этом кадре новый пик?
+struct BandData {                                             // Структура для передачи данных по каналам
+  uint8_t level;                                              // Нормализованный уровень 0-255
+  bool isNewPeak;                                             // Флаг резкой атаки (для триггеров эффектов)
 };
 //*****************************************************************************************
-//Структуры
-struct Settings { 
-  uint8_t brightness, currentEffect, sensitivity, backgroundColor; 
-  uint16_t numLeds; 
-  uint8_t smooth; 
-  uint16_t magic_key; 
+struct Settings {                                             // Структура для хранения настроек
+  uint8_t brightness, currentEffect, sensitivity, backgroundColor;  // яркость (0-100), эффект (0-5), чувствительность (10-100), цвет фона (0-4)
+  uint16_t numLeds;                                           // количество светодиодов (60-600)      
+  uint8_t smooth;                                             // плавность (0-100)
+  uint16_t magic_key;                                         // "магический ключ" для проверки целостности данных  
   };
-Settings currentSettings;
+Settings currentSettings;                                     // Текущие настройки
 
 //*****************************************************************************************
-enum MenuItem { 
-  MENU_BRIGHTNESS, 
-  MENU_EFFECT, 
-  MENU_SENSITIVITY, 
-  MENU_BACKGROUND, 
-  MENU_SMOOTH };
-MenuItem currentMenuItem = MENU_EFFECT;
+// Режимы меню
+enum MenuMode {
+  MENU_MODE_EFFECT,                                           // Режим выбора эффекта (по умолчанию)
+  MENU_MODE_SETTINGS                                          // Режим настроек (вход по длинному OK)
+};
+MenuMode currentMenuMode = MENU_MODE_EFFECT;                  // Текущий режим меню
+
+// Пункты меню настроек (БЕЗ выбора эффекта!)
+enum MenuItem {
+  MENU_BRIGHTNESS,                                            // Яркость
+  MENU_SENSITIVITY,                                           // Чувствительность           
+  MENU_BACKGROUND,                                            // Фон         
+  MENU_SMOOTH                                                 // Плавность           
+};
+MenuItem currentMenuItem = MENU_BRIGHTNESS;                   // Текущий пункт меню
 //****************************************************************************************
 // --- Структура и массив для эффекта "Танцы плюс" ("Искры") ---
 //****************************************************************************************
-#define N_SPARKS 30 // Максимальное количество "искр" на экране
+#define N_SPARKS 30                                           // Максимальное количество "искр" на экране
 
 struct Spark {
-  bool active;      // Активна ли искра?
-  //uint8_t magnitude;  // Сила (0-255), влияет на скорость
-  //int duration;      // Время жизни в кадрах
-  float speed; // Индивидуальная скорость "искры"
-  int age;          // Возраст в кадрах
-  uint32_t color;     // Цвет искры
+  bool active;                                                // Активна ли искра?
+  float speed;                                                // Индивидуальная скорость "искры"
+  int age;                                                    // Возраст в кадрах
+  uint32_t color;                                             // Цвет искры
 };
 
-Spark sparks[N_SPARKS]; // Глобальный массив-"инкубатор" для искр
+Spark sparks[N_SPARKS];                                       // Глобальный массив-"инкубатор" для искр
 
 // Базовая скорость "искры" в пикселях за кадр, в зависимости от канала (частоты)
 const float base_speed_by_channel[NUM_BANDS] = {
-  0.18f,  // Канал 0 (бас) - медленные
+  0.08f,  // Канал 0 (бас) - медленные
+  0.10f,
+  0.12f,
+  0.16f,  // Канал 3 (середина)
+  0.18f,
   0.20f,
   0.22f,
-  0.26f,  // Канал 3 (середина)
-  0.28f,
-  0.30f,
-  0.32f,
-  0.34f   // Канал 7 (верх) - быстрые
+  0.24f   // Канал 7 (верх) - быстрые
 };
 //****************************************************************************************
 // --- Структура и массив для эффекта "Звезды" ---
 //****************************************************************************************
-#define MAX_STARS 40 // Максимальное количество "звезд" на экране
+#define MAX_STARS 40                                          // Максимальное количество "звезд" на экране
 
 struct Star {
-  bool active;      // Активна ли звезда?
-  int position;     // Позиция на ленте
-  int brightness;   // Текущая яркость (0-255)
-  uint32_t color;     // Цвет звезды
+  bool active;                                                // Активна ли звезда?
+  int position;                                               // Позиция на ленте
+  int brightness;                                             // Текущая яркость (0-255)
+  uint32_t color;                                             // Цвет звезды
 };
 
 Star starPool[MAX_STARS]; // Глобальный массив-"пул" для звезд
 //****************************************************************************************
 //--- прототипы функций ---
 //****************************************************************************************
-void Vizual_OLED(BandData* band_data_copy);
-void Menu_OLED();
-void IDLE_OLED();
-bool buttonsH();
-void saveSettings();
-void loadSettings();
-void ColorMuzik(BandData* band_data);
-void effect_Stroboscope(BandData* band_data);
-void effect_VuMeter_Gradient(BandData* band_data);
-void spawnSparks(BandData* band_data);
-void effect_DanceParty();
-void spawnStars(BandData* band_data);
-void effect_Stars();
+void Vizual_OLED(BandData* band_data_copy);                 // отрисовка анализатора на OLED
+void Menu_OLED();                                           // отрисовка меню на OLED      
+void IDLE_OLED();                                           // отрисовка экрана IDLE на OLED
+bool buttonsH();                                            // обработка кнопок
+void saveSettings();                                        // сохранение настроек в EEPROM
+void loadSettings();                                        // загрузка настроек из EEPROM
+void ColorMuzik(BandData* band_data);                       // эффект ЦветМузыка
+void effect_Stroboscope(BandData* band_data);               // эффект Стробоскоп
+void effect_VuMeter_Gradient(BandData* band_data);          // эффект VU-Метр Градиент        
+void spawnSparks(BandData* band_data);                      // спавн искр для эффекта Танцы+
+void effect_DanceParty();                                   // эффект Танцы+
+void spawnStars(BandData* band_data);                       // спавн звезд для эффекта Звезды
+void effect_Stars();                                        // эффект Звезды
 //*****************************************************************************************
 // --- Функция отрисовки анализатора на OLED дисплее ---
 //*****************************************************************************************
-void Vizual_OLED(BandData* band_data_copy) {
+void Vizual_OLED(BandData* band_data_copy) {                // Экран анализатора
 
     // --- Подготовка массива уровней для SavaGFX эквалайзера ---
-    static uint8_t levels[NUM_BANDS] = {0};
+    static uint8_t levels[NUM_BANDS] = {0};                 // Массив уровней для эквалайзера
 
     for (int i = 0; i < NUM_BANDS; i++) {
-        levels[i] = band_data_copy[i].level;  // Копируем уровни (0-255)
+        levels[i] = band_data_copy[i].level;                // Копируем уровни (0-255)
     }
-
     // --- Отрисовка с контролем FPS ---
-    if (FPS_Timer.Gen(25)) {  // Изменено: GenML() -> Gen()
-        oled.clear();
-
+    //if (FPS_Timer.Gen(25)) {                                // Ограничение до ~25 FPS
+        oled.clear();                                       // Очищаем экран
         // Используем готовый эквалайзер из SavaGFX_OLED
         // peaks=true, peakDecaySpeed=10 (100ms на уровень)
-        gfx.equalizer8(levels, true, 10);
-
-        oled.display();  // Изменено: update() -> display()
-    }
+        gfx.equalizer8(levels, true, 10);                   // Отрисовка эквалайзера с пиковыми индикаторами
+        //oled.display();                                     // Обновляем дисплей
+    //}
 }
 //*****************************************************************************************
-// --- Функция отрисовки меню на OLED дисплее ---
+// --- Функция отрисовки меню на OLED дисплее (2 режима) ---
 //*****************************************************************************************
-void Menu_OLED() {
-    // --- Шаг 1: Очищаем экран и устанавливаем шрифт ---
-    oled.clear();
-    oled.font(SF_Font_x2_P16); // Крупный шрифт 16px для меню
+void Menu_OLED() {                                          // Экран меню      
+    //oled.clear();                                         // Очищаем экран
+    oled.font(SF_Font_x2_P16);                            // Крупный шрифт 16px
 
-    // --- Шаг 2: Отрисовка названия параметра ---
-    oled.cursor(0, 8, StrCenter);
+    // === РЕЖИМ 1: ВЫБОР ЭФФЕКТА ===
+    if (currentMenuMode == MENU_MODE_EFFECT) {            // Режим выбора эффекта
+        oled.cursor(0, 8, StrCenter);                     // Позиция для текста      
+        oled.print("Эффект");                             // Заголовок        
+        oled.drawPrint();                                 // ОБЯЗАТЕЛЬНО после print() 
 
-    switch (currentMenuItem) {
-        case MENU_BRIGHTNESS:   oled.print("Яркость");   break;
-        case MENU_EFFECT:       oled.print("Эффект");      break;
-        case MENU_SENSITIVITY:  oled.print("Чувств.");   break;
-        case MENU_BACKGROUND:   oled.print("Фон");         break;
-        case MENU_SMOOTH:       oled.print("Плавность");  break;
+        oled.cursor(0, 40, StrCenter);                    // Позиция для текста эффекта
+        const char* effectNames[] = { "ЦветМузыка", "Стробоскоп", "VU-Метр", "Искры+", "Звезды", "Авто" };
+        oled.print(effectNames[currentSettings.currentEffect]); // Название эффекта
+        oled.drawPrint();                                 // ОБЯЗАТЕЛЬНО после print()
     }
-    oled.drawPrint(); // ОБЯЗАТЕЛЬНО после print()
 
-    // --- Шаг 3: Отрисовка значения параметра ---
-    oled.cursor(0, 40, StrCenter);
+    // === РЕЖИМ 2: НАСТРОЙКИ ===
+    else if (currentMenuMode == MENU_MODE_SETTINGS) {
+        oled.cursor(0, 8, StrCenter);
 
-    switch (currentMenuItem) {
-        case MENU_BRIGHTNESS:
-            oled.print(currentSettings.brightness);
-            oled.print("%");
-            break;
-        case MENU_EFFECT: {
-            const char* effectNames[] = { "ЦветМузыка", "Стробоскоп", "VU-Метр", "Искры+", "Звезды", "Авто" };
-            oled.print(effectNames[currentSettings.currentEffect]);
-            break;
+        switch (currentMenuItem) {
+            case MENU_BRIGHTNESS:   oled.print("Яркость");    break;
+            case MENU_SENSITIVITY:  oled.print("Чувств.");    break;
+            case MENU_BACKGROUND:   oled.print("Фон");        break;
+            case MENU_SMOOTH:       oled.print("Плавность");  break;
         }
-        case MENU_SENSITIVITY:
-            oled.print(currentSettings.sensitivity);
-            oled.print("%");
-            break;
-        case MENU_BACKGROUND: {
-            if (currentSettings.backgroundColor < 4) {
-                const char* backgroundNames[] = { "Зеленый", "Красный", "Синий", "Белый" };
-                oled.print(backgroundNames[currentSettings.backgroundColor]);
-            } else {
-                oled.print("Выкл.");
+        oled.drawPrint();
+
+        oled.cursor(0, 40, StrCenter);
+
+        switch (currentMenuItem) {
+            case MENU_BRIGHTNESS:
+                oled.print(currentSettings.brightness);
+                oled.print("%");
+                break;
+            case MENU_SENSITIVITY:
+                oled.print(currentSettings.sensitivity);
+                oled.print("%");
+                break;
+            case MENU_BACKGROUND: {
+                if (currentSettings.backgroundColor < 4) {
+                    const char* backgroundNames[] = { "Зеленый", "Красный", "Синий", "Белый" };
+                    oled.print(backgroundNames[currentSettings.backgroundColor]);
+                } else {
+                    oled.print("Выкл.");
+                }
+                break;
             }
-            break;
+            case MENU_SMOOTH:
+                oled.print(currentSettings.smooth);
+                oled.print("%");
+                break;
         }
-        case MENU_SMOOTH:
-            oled.print(currentSettings.smooth);
-            oled.print("%");
-            break;
+        oled.drawPrint();
     }
-    oled.drawPrint(); // ОБЯЗАТЕЛЬНО после print()
 
-    // --- Шаг 4: Обновляем физический экран ---
-    oled.display();  // Изменено: update() -> display()
+    //oled.display();
 }
 //*****************************************************************************************
 // --- Функция отрисовки меню на OLED дисплее ---
 //*****************************************************************************************
-void IDLE_OLED(){
-    oled.clear();
-    oled.font(SF_Font_x2_P16); // Крупный шрифт 16px
-    oled.cursor(0, 28, StrCenter);
+void IDLE_OLED(){                                           // Экран ТИШИНА
+    //oled.clear();
+    oled.font(SF_Font_x2_P16);                        // Крупный шрифт 16px
+    oled.cursor(0, 22, StrCenter);                    // Позиция для текста
     oled.print("ТИШИНА");
-    oled.drawPrint(); // ОБЯЗАТЕЛЬНО после print()
-    oled.display();  // Изменено: update() -> display()
+    oled.drawPrint();                                 // ОБЯЗАТЕЛЬНО после print()
+    //oled.display();                                   // Обновляем дисплей  
 }
 //*****************************************************************************************
-// ---управление кнопками---
+// --- Управление кнопками (2 режима меню) ---
 //*****************************************************************************************
 bool buttonsH(){
 
-  bool butMinus = trigRT_minus.RT(btn_minus.read());
-  bool butPlus = trigRT_plus.RT(btn_plus.read());
-  bool butOk = trigRT_ok.RT(btn_ok.read());
-  bool anyButton = butMinus || butPlus || butOk;
+  // Читаем кнопки
+  bool butMinus = trigRT_minus.RT(btn_minus.read());        // Минус → уменьшение значения
+  bool butPlus = trigRT_plus.RT(btn_plus.read());           // Плюс → увеличение значения
+
+  // Для OK используем readLong(1000мс) чтобы различать короткое/длинное
+  uint8_t okEvent = btn_ok.readLong();                      // OK → короткое/длинное нажатие
+  bool butOkShort = (okEvent == BTN_CLICK);                 // Короткое нажатие
+  bool butOkLong = (okEvent == BTN_LONG);                   // Длинное нажатие
+
+  bool anyButton = butMinus || butPlus || butOkShort || butOkLong;  // Любая кнопка нажата
 
   // Обрабатываем логику только если меню активно!
-  // TOF теперь требует input: anyButton продлевает таймер
   if (menuTimeoutTimer.TOF(MENU_TIMEOUT, anyButton)) {
-    if(butOk){
-      currentMenuItem = (MenuItem)((currentMenuItem + 1) % NUM_MENU_ITEMS);
-    }
-    if (butPlus) {
-      switch (currentMenuItem) {
-        case MENU_BRIGHTNESS:
-         if (currentSettings.brightness < 95) currentSettings.brightness += 5;
-          else currentSettings.brightness = 100;
-          break;
-        case MENU_EFFECT: currentSettings.currentEffect = (currentSettings.currentEffect + 1) % NUM_EFFECTS;
-        break;
-        case MENU_SENSITIVITY: if (currentSettings.sensitivity < 100) currentSettings.sensitivity += 10;
-        break;
-        case MENU_BACKGROUND: currentSettings.backgroundColor = (currentSettings.backgroundColor + 1) % NUM_BG_OPTIONS;
-        break;
-        case MENU_SMOOTH:
-          if (currentSettings.smooth < 100) currentSettings.smooth += 10;
-        break;
-        }
-    }
-    if (butMinus) {
-      switch (currentMenuItem) {
-        case MENU_BRIGHTNESS:
-          if (currentSettings.brightness > 55) currentSettings.brightness -= 5;
-          else currentSettings.brightness = 50;
-        break;
-        case MENU_EFFECT:
-          if (currentSettings.currentEffect > 0) currentSettings.currentEffect--;
-          else currentSettings.currentEffect = NUM_EFFECTS - 1;
-        break;
-        case MENU_SENSITIVITY:
-          if (currentSettings.sensitivity > 10) currentSettings.sensitivity -= 10;
-        break;
-        case MENU_BACKGROUND:
-          if (currentSettings.backgroundColor > 0) currentSettings.backgroundColor--;
-          else currentSettings.backgroundColor = NUM_BG_OPTIONS - 1;
-        break;
-        case MENU_SMOOTH:
-          if (currentSettings.smooth > 0) currentSettings.smooth -= 10;
-        break;
+
+    // === РЕЖИМ 1: ВЫБОР ЭФФЕКТА ===
+    if (currentMenuMode == MENU_MODE_EFFECT) {
+
+      // Плюс → следующий эффект (СРАЗУ переключается!)
+      if (butPlus) {
+        currentSettings.currentEffect = (currentSettings.currentEffect + 1) % NUM_EFFECTS;
+      }
+
+      // Минус → предыдущий эффект (СРАЗУ переключается!)
+      if (butMinus) {
+        if (currentSettings.currentEffect > 0) currentSettings.currentEffect--;
+        else currentSettings.currentEffect = NUM_EFFECTS - 1;
+      }
+
+      // OK короткое → ничего не делаем (просто показываем меню)
+
+      // OK длинное → переход в режим НАСТРОЕК
+      if (butOkLong) {
+        currentMenuMode = MENU_MODE_SETTINGS;
+        currentMenuItem = MENU_BRIGHTNESS; // Начинаем с яркости
       }
     }
-    strip.setBrightness(map(currentSettings.brightness,50,100,127,255));
-    SetSensitivity = map(currentSettings.sensitivity,0,100,80000,1);
+
+    // === РЕЖИМ 2: НАСТРОЙКИ ===
+    else if (currentMenuMode == MENU_MODE_SETTINGS) {
+
+      // OK короткое → следующий пункт настроек
+      if (butOkShort) {
+        currentMenuItem = (MenuItem)((currentMenuItem + 1) % 4); // 4 пункта настроек
+      }
+
+      // Плюс → увеличить значение
+      if (butPlus) {
+        switch (currentMenuItem) {
+          case MENU_BRIGHTNESS:
+            if (currentSettings.brightness < 95) currentSettings.brightness += 5;
+            else currentSettings.brightness = 100;
+            break;
+          case MENU_SENSITIVITY:
+            if (currentSettings.sensitivity < 100) currentSettings.sensitivity += 10;
+            break;
+          case MENU_BACKGROUND:
+            currentSettings.backgroundColor = (currentSettings.backgroundColor + 1) % NUM_BG_OPTIONS;
+            break;
+          case MENU_SMOOTH:
+            if (currentSettings.smooth < 100) currentSettings.smooth += 10;
+            break;
+        }
+      }
+
+      // Минус → уменьшить значение
+      if (butMinus) {
+        switch (currentMenuItem) {
+          case MENU_BRIGHTNESS:
+            if (currentSettings.brightness > 55) currentSettings.brightness -= 5;
+            else currentSettings.brightness = 50;
+            break;
+          case MENU_SENSITIVITY:
+            if (currentSettings.sensitivity > 10) currentSettings.sensitivity -= 10;
+            break;
+          case MENU_BACKGROUND:
+            if (currentSettings.backgroundColor > 0) currentSettings.backgroundColor--;
+            else currentSettings.backgroundColor = NUM_BG_OPTIONS - 1;
+            break;
+          case MENU_SMOOTH:
+            if (currentSettings.smooth > 0) currentSettings.smooth -= 10;
+            break;
+        }
+      }
+    }
+
+    // Применяем яркость
+    strip.setBrightness(map(currentSettings.brightness, 50, 100, 127, 255));
   }
 
-  return anyButton;
+  return anyButton;  // Возвращаем флаг нажатия любой кнопки
 }
 //*****************************************************************************************
 // --- Функции записи в EEPROM ---
@@ -467,159 +450,213 @@ void IRAM_ATTR sampling_timer_callback(void* arg) {
 void setup() {
   
   // --- Инициализация кнопок через SavaButton ---
-  btn_minus(BTN_MINUS_PIN, PLUS);  // GPIO13, подтяжка к плюсу
-  btn_ok(BTN_OK_PIN, PLUS);        // GPIO15, подтяжка к плюсу
-  btn_plus(BTN_PLUS_PIN, PLUS);    // GPIO5, подтяжка к плюсу
+  btn_minus(BTN_MINUS_PIN, PLUS);                 // GPIO13, подтяжка к плюсу
+  btn_ok(BTN_OK_PIN, PLUS);                       // GPIO15, подтяжка к плюсу
+  btn_plus(BTN_PLUS_PIN, PLUS);                   // GPIO5, подтяжка к плюсу
+  btn_ok.setLong(1000);                           // Длинное нажатие 1000 мс
 
-  analogReadResolution(12);
-  analogSetAttenuation(ADC_11db);
-  Serial.begin(115200);
+  analogReadResolution(12);                       // Разрешение АЦП 12 бит  
+  analogSetAttenuation(ADC_11db);                 // Аттенюатор для полного диапазона 0-3.3В
+  Serial.begin(115200);                           // Инициализация Serial
 
   // --- ИНИЦИАЛИЗАЦИЯ И ЗАГРУЗКА НАСТРОЕК ---
-  EEPROM.begin(EEPROM_SIZE);
-  loadSettings();
+  EEPROM.begin(EEPROM_SIZE);                      // Инициализация EEPROM
+  loadSettings();                                 // Загрузка настроек из EEPROM
+
+  Serial.print("Sensitivity: "); Serial.print(currentSettings.sensitivity); Serial.println("%");
 
   // --- Инициализация OLED (I2C автоматически настраивается) ---
-  oled.init(800000, 21, 22);  // 800kHz, SDA=21, SCL=22 (стандарт ESP32)
+  oled.init(800000, 21, 22);                      // 800kHz, SDA=21, SCL=22 (стандарт ESP32)
   oled.clear();
 
   // --- Заставка SAVA ---
-  oled.font(SF_Font_x2_P16);       // Крупный шрифт (16px недостаточно для scale(4), но покажем)
-  oled.cursor(0, 28, StrCenter);    // Позиция для текста
-  oled.drawMode(ADD_UP);           // Режим наложения
-  oled.print("SAVA");
-  oled.drawPrint();
-  oled.rectR(0, 0, 127, 63, 3, REPLACE);  // Прямоугольник со скруглением r=3
-  oled.display();
-  delay(3000);
-  oled.clear();
+  oled.font(SF_Font_x2_P16);                      // Крупный шрифт (16px недостаточно для scale(4), но покажем)
+  oled.cursor(0, 22, StrCenter);                  // Позиция для текста
+  oled.drawMode(ADD_UP);                          // Режим наложения
+  oled.print("SAVA");                             // Текст заставки
+  oled.drawPrint();                               // ОБЯЗАТЕЛЬНО после print()
+  oled.rectR(0, 0, 127, 63, 3, REPLACE);          // Прямоугольник со скруглением r=3
+  oled.display();                                 // Обновляем дисплей
+  //delay(3000);                                    // Задержка 3 секунды
+  //oled.clear();                                   // Очищаем экран
 
   // --- Инициализация LED ленты ---
-  if (!strip.begin(NUM_LEDS, LED_PIN)) {
-    while (true);
+  if (!strip.begin(NUM_LEDS, LED_PIN)) {          // Инициализация ленты
+    while (true);                                 // Останавливаемся здесь, если лента не подключена
   }
-  strip.setGammaCorrection(true);
+  strip.setGammaCorrection(true);                 // Включаем гамма-коррекцию  
   // --- Инициализация библиотеки esp-dsp ---
   // Выполняется один раз для подготовки внутренних таблиц, что ускоряет FFT.
-  esp_err_t ret = dsps_fft2r_init_fc32(NULL, CONFIG_DSP_MAX_FFT_SIZE);
+  esp_err_t ret = dsps_fft2r_init_fc32(NULL, CONFIG_DSP_MAX_FFT_SIZE);      // Инициализация FFT
   if (ret != ESP_OK) {
     Serial.println("FFT initialization failed!");
     return;
   }
     //создаем очередь
     //peaksQueue = xQueueCreate(1, sizeof(float) * NUM_BANDS);
-    peaksQueue = xQueueCreate(1, sizeof(BandData) * NUM_BANDS);
+    peaksQueue = xQueueCreate(1, sizeof(BandData) * NUM_BANDS);             // очередь для передачи данных между ядрами
 
     // Создаем и запускаем задачу для FFT на ядре 0
-    xTaskCreatePinnedToCore(
-        TaskFFTcode, "TaskFFT", 32768, NULL, 10, NULL, 0);
+    xTaskCreatePinnedToCore(                                                // Создание задачи
+        TaskFFTcode, "TaskFFT", 32768, NULL, 10, NULL, 0);                  // Запуск на ядре 0
 
     Serial.println("Setup complete.");
-  delay(500);
+  delay(3000);
+  oled.clear();                                                             // Очищаем экран
   //disableCore0WDT();
   //disableCore1WDT();
 }
 //****************************************************************************************
-// --- Функция выполнения задачи ядра 0: Сбор, FFT, vTaskDelay(1) ---
+// --- ЯДРО 0: FFT обработка звука (ПОЛНОСТЬЮ ПЕРЕПИСАНО) ---
 //****************************************************************************************
 void TaskFFTcode(void * pvParameters) {
     Serial.print("TaskFFT running on core ");
     Serial.println(xPortGetCoreID());
 
-    memset(bandPeakLevel, 0, sizeof(bandPeakLevel));
-    // --- Инициализация переменных для АРУ ---
-    memset(band_history, 0, sizeof(band_history));
-    for (int i = 0; i < NUM_BANDS; i++) {
-        minLvlAvg[i] = 0;
-        maxLvlAvg[i] = DELTA_INITIAL_MAX;
+    // === БУФЕРЫ ДЛЯ FFT (статические, создаются один раз) ===
+    static float fft_input[SAMPLES];           // Входные данные для FFT
+    static float temp_fft_buffer[SAMPLES * 2]; // Комплексный буфер [Re, Im, Re, Im...]
+    static float hamming_window[SAMPLES];      // Окно Хэмминга (генерируется один раз)
+
+    // === ГЕНЕРАЦИЯ ОКНА ХЭММИНГА (один раз при старте) ===
+    for (int i = 0; i < SAMPLES; i++) {
+        hamming_window[i] = 0.54f - 0.46f * cosf(2 * M_PI * i / (SAMPLES - 1));
     }
 
+    // === ДЕТЕКТОРЫ АТАКИ ===
+    static uint8_t last_level[NUM_BANDS] = {0};
 
-    float fftSamples[SAMPLES]; // Локальный буфер для работы
-    static float wind_buffer[SAMPLES];
-    dsps_wind_hann_f32(wind_buffer, SAMPLES);
-   
+    // === МАССИВ ДЛЯ ОТПРАВКИ В ОЧЕРЕДЬ ===
+    BandData band_data[NUM_BANDS];
 
-    // Настройка и запуск esp_timer ПРЯМО ВНУТРИ ЗАДАЧИ
+    // === НАСТРОЙКА ESP_TIMER ДЛЯ СБОРА СЕМПЛОВ ===
     const esp_timer_create_args_t timer_args = {
         .callback = &sampling_timer_callback,
         .name = "audio_sampler"
     };
-    esp_timer_create(&timer_args, &sampling_timer);
-    uint64_t period_us = 1000000 / SAMPLING_FREQ;
-    esp_timer_start_periodic(sampling_timer, period_us);
+    esp_timer_create(&timer_args, &sampling_timer);                       // Создаем таймер
+    esp_timer_start_periodic(sampling_timer, 1000000 / SAMPLING_FREQ);    // Запускаем таймер с нужной периодичностью
 
-    int start_bin_freq = (int)round(150.0 / (SAMPLING_FREQ / (float)SAMPLES)); //разгружаем
+    // === КОНСТАНТЫ FFT ===
+    const int start_bin_freq = 2;                                         // 150 Гц / 95.3 Гц/бин ≈ 1.57 → 2
+    const float MIN_AMPLITUDE[] = {
+                                  8600.0f, 
+                                  8100.0f, 
+                                  5000.0f, 
+                                  5000.0f,
+                                  2000.0f,
+                                  8000.0f,
+                                  2000.0f,
+                                  200.0f};                                   
+    const float MAX_AMPLITUDE[] = {
+                                  55000.0f, 
+                                  50000.0f, 
+                                  40000.0f, 
+                                  40000.0f,
+                                  30000.0f,
+                                  40000.0f,
+                                  40000.0f,
+                                  15000.0f};                               
 
-    //float temp_fft_buffer[2048];                      
-    float temp_fft_buffer[SAMPLES * 2]; // убрал чтоб не нагружать процессор 
-    float fft_buffer[SAMPLES]; 
-    
-    //SetSensitivity = map(currentSettings.sensitivity,0,100,1,20000);
-
+    // === ГЛАВНЫЙ ЦИКЛ ===
     for (;;) {
-        // Если флаг поднят, начинаем работу
         if (samplesReadyFlag) {
-            
-            // 1. Быстро копируем данные и сбрасываем флаг под защитой
-            portENTER_CRITICAL(&isrMux);
-            //samplesReadyFlag = false;
-            for (int i = 0; i < SAMPLES; i++) {
-                //AnalogVolume = constrain(map(raw_samples[i],500,4096,0,4096),0,4096);
-                AnalogVolume = raw_samples[i];
-                fftSamples[i] = (float)AnalogVolume; 
-            }
-            samplesReadyFlag = false;
-            portEXIT_CRITICAL(&isrMux);
-        }
-            //Serial.print(AnalogVolume); Serial.print(" - ");  
 
-            // 2. Выполняем полный расчет FFT (все буферы локальные)
-            
-            //dsps_mul_f32(fftSamples, wind_buffer, temp_fft_buffer, SAMPLES, 1, 1, 1);
+            // ============================================================
+            // ШАГ 1: КОПИРОВАНИЕ И ПОДГОТОВКА ДАННЫХ
+            // ============================================================
+            portENTER_CRITICAL(&isrMux);                                  // Защита от прерываний  
+            for (int i = 0; i < SAMPLES; i++) {                           // Копируем сырые семплы в float буфер
+                fft_input[i] = (float)raw_samples[i];                     // Преобразование в float
+            }
+            samplesReadyFlag = false;                                     // Сбрасываем флаг готовности 
+            portEXIT_CRITICAL(&isrMux);                                   // Снимаем защиту от прерываний
+
+            // ============================================================
+            // ШАГ 2: УДАЛЕНИЕ DC OFFSET (постоянная составляющая)
+            // ============================================================
+            float mean = 0;
+            for (int i = 0; i < SAMPLES; i++) mean += fft_input[i];
+            mean /= SAMPLES;
+            for (int i = 0; i < SAMPLES; i++) fft_input[i] -= mean;
+
+            // ============================================================
+            // ШАГ 3: ПРИМЕНЕНИЕ ОКНА ХЭММИНГА (убирает spectral leakage)
+            // ============================================================
+            dsps_mul_f32(fft_input, hamming_window, fft_input, SAMPLES, 1, 1, 1);
+
+            // ============================================================
+            // ШАГ 4: ПРЕОБРАЗОВАНИЕ В КОМПЛЕКСНЫЙ ФОРМАТ [Re, Im, Re, Im...]
+            // ============================================================
             for (int i = SAMPLES - 1; i >= 0; i--) {
-                temp_fft_buffer[i * 2] = fftSamples[i];// temp_fft_buffer[i];
-                temp_fft_buffer[i * 2 + 1] = 0;
+                temp_fft_buffer[i * 2] = fft_input[i];
+                temp_fft_buffer[i * 2 + 1] = 0.0f;
             }
 
+            // ============================================================
+            // ШАГ 5: БЫСТРОЕ ПРЕОБРАЗОВАНИЕ ФУРЬЕ
+            // ============================================================
             dsps_fft2r_fc32(temp_fft_buffer, SAMPLES);
             dsps_bit_rev_fc32(temp_fft_buffer, SAMPLES);
             dsps_cplx2reC_fc32(temp_fft_buffer, SAMPLES);
 
-            for (int i = 0 ; i < SAMPLES / 2 ; i++) {
-              fft_buffer[i] = sqrt(temp_fft_buffer[i * 2 + 0] * temp_fft_buffer[i * 2 + 0] + temp_fft_buffer[i * 2 + 1] * temp_fft_buffer[i * 2 + 1]);
-              //Serial.print(fft_buffer[i]);Serial.print(" ");
+            // ============================================================
+            // ШАГ 6: ВЫЧИСЛЕНИЕ МАГНИТУДЫ (амплитуды спектра)
+            // ============================================================
+            for (int i = 0; i < SAMPLES / 2; i++) {
+                float re = temp_fft_buffer[i * 2];
+                float im = temp_fft_buffer[i * 2 + 1];
+                temp_fft_buffer[i] = sqrtf(re * re + im * im);
             }
 
-            //int start_bin_freq = 6; 
-            //int start_bin_freq = (int)round(150.0 / (SAMPLING_FREQ / (float)SAMPLES)); //разгружаем
-            // --- Шаг 3.1: Расчет "сырых" пиков (ваш код) ---
-            float raw_peaks[NUM_BANDS] = {0};
-            //int start_bin_freq = 6;
+            // ============================================================
+            // ШАГ 7: ПОИСК ПИКОВ ПО 8 ЧАСТОТНЫМ ДИАПАЗОНАМ
+            // ============================================================
+            float peaks[NUM_BANDS] = {0};
+
             for (int b = 0; b < NUM_BANDS; b++) {
-                int start_bin = (b == 0) ? start_bin_freq : (band_max_bin[b-1] + 1);
+                int start_bin = (b == 0) ? start_bin_freq : (band_max_bin[b - 1] + 1);
                 int end_bin = band_max_bin[b];
+
                 for (int k = start_bin; k <= end_bin; k++) {
-                    if (temp_fft_buffer[k] > raw_peaks[b]) {
-                        raw_peaks[b] = temp_fft_buffer[k];
+                    if (temp_fft_buffer[k] > peaks[b]) {
+                        peaks[b] = temp_fft_buffer[k];
                     }
                 }
             }
 
-            // --- Шаг 3: Фильтрация и отправка ---
+            // ============================================================
+            // ШАГ 8: НОРМАЛИЗАЦИЯ В 0-255 С УЧЁТОМ ЧУВСТВИТЕЛЬНОСТИ
+            // ============================================================
+            float sensitivity_mult = (float)currentSettings.sensitivity / 100.0f;
+
             for (int i = 0; i < NUM_BANDS; i++) {
-                // Применяем gain
-                //raw_peaks[i] *= band_gain_factors[i];
-                
-                // Отсекаем шум
-                if (raw_peaks[i] < noise_thresholds_by_band[i]) {
-                    raw_peaks[i] = 0;
-                }
+                // Масштабирование в 0-255
+                float mapped_value = (peaks[i] - MIN_AMPLITUDE[i]) / (MAX_AMPLITUDE[i] - MIN_AMPLITUDE[i]) * 255.0f;
+
+                // Применяем чувствительность
+                mapped_value *= sensitivity_mult;
+
+                // Ограничение 0-255
+                if (mapped_value > 255.0f) mapped_value = 255.0f;
+                if (mapped_value < 0.0f) mapped_value = 0.0f;
+
+                uint8_t current_level = (uint8_t)mapped_value;
+
+                // ============================================================
+                // ШАГ 9: ДЕТЕКЦИЯ АТАКИ (резкий скачок уровня)
+                // ============================================================
+                band_data[i].isNewPeak = (current_level > last_level[i] + ATTACK_THRESHOLD);
+                band_data[i].level = current_level;
+                last_level[i] = current_level;
             }
 
-            // 4. Отправляем в очередь "сырые", но очищенные float
-            xQueueOverwrite(peaksQueue, &raw_peaks);
-        //} //скоба флага 
+            // ============================================================
+            // ШАГ 10: ОТПРАВКА ДАННЫХ В ЯДРО 1
+            // ============================================================
+            xQueueOverwrite(peaksQueue, &band_data);
+        }
+
         vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
@@ -657,7 +694,8 @@ void loop() {
   // FT вернет true только ОДИН РАЗ в этот самый момент.
   if (menuExitTrigger.FT(isMenuNow)) {
     saveSettings(); // Сохраняем настройки ТОЛЬКО В МОМЕНТ ВЫХОДА из меню
-    Serial.println("--- SETTINGS SAVED ---"); // Отладочное сообщение
+    currentMenuMode = MENU_MODE_EFFECT; // АВТОМАТИЧЕСКИЙ ВОЗВРАТ в режим выбора эффекта!
+    Serial.println("--- SETTINGS SAVED, MENU RESET TO EFFECT MODE ---");
   }
 
     
@@ -669,7 +707,7 @@ void loop() {
 
   if (currentSettings.currentEffect == 5) { // 5 - это "Авто"
     // Мы в режиме автопереключения
-    if (autoCycleTimer.Gen(TIMERAUTOCYCLE)) {  // Изменено: GenML() -> Gen()
+    if (autoCycleTimer.Gen(TIMERAUTOCYCLE)) {  
         // Прошло 3 секунды, переключаем на следующий эффект
         auto_effect_index = (auto_effect_index + 1) % 5; // 5 "реальных" эффектов
     }
@@ -725,25 +763,29 @@ void loop() {
       );
       // Вызываем эффект "Кометы", передавая чистый цвет.
       strip.runCometsEffect(
-        5,                      // num_comets
-        10,                     // tail_length
-        channel_colors,         // palette
-        NUM_BANDS,              // palette_size
-        comets_bg_color,        // background_color
-        1500                    // spawn_interval_ms
+        5,                        // количество комет 
+        10,                       // длина хвоста комет
+        channel_colors,           // цвета комет (используем цвета каналов)
+        NUM_BANDS,                // количество каналов
+        comets_bg_color,          // цвет фона (из настроек)
+        1500                      // интервал появлния новых комет в мс
         );
       strip.show();
     }
   }
   
-  // В зависимости от состояния, рисуем нужный экран
-  if (isMenuNow) {
-    Menu_OLED();
-  } else {
-    if(!FlagIDLE)Vizual_OLED(band_data_copy);
-    else IDLE_OLED();
+  // --- ЭТАП 4: Отрисовка на OLED дисплее ---
+  if (FPS_Timer.Gen(25)) {                                // Ограничение до ~25 FPS
+    oled.clear(); 
+    // В зависимости от состояния, рисуем нужный экран
+    if (isMenuNow) {
+      Menu_OLED();
+    } else {
+      if(!FlagIDLE)Vizual_OLED(band_data_copy);
+      else IDLE_OLED();
+    }
+    oled.display();                                     // Обновляем дисплей
   }
-
 
   ///--- Дебаги --- 
   //uint32_t loopExecutionTime = millis() - loopStartTime;
@@ -823,17 +865,15 @@ void effect_Stroboscope(BandData* band_data) {
         strip.fill(WHITE);
         return; 
     }
-    // 5. Находим максимальный "липкий" пик среди ВСЕХ каналов.
-    // Это будет наш уровень громкости для фона.
-    uint8_t max_peak_level = 0;
+    // 5. Находим максимальный уровень среди ВСЕХ каналов для фона
+    uint8_t max_level = 0;
     for (int i = 0; i < NUM_BANDS; i++) {
-        if (band_data[i].peakLevel > max_peak_level) {
-            max_peak_level = band_data[i].peakLevel;
+        if (band_data[i].level > max_level) {
+            max_level = band_data[i].level;
         }
     }
-    //Serial.println(max_peak_level);
-    // 6. Берем базовый цвет фона из массива backgr_colors[currentSettings.backgroundColor]; 
-    strip.fillColor(backgr_colors[currentSettings.backgroundColor],constrain(max_peak_level, BACKGROUND_BRIGHTNESS, 255));
+    // 6. Берем базовый цвет фона из массива backgr_colors[currentSettings.backgroundColor];
+    strip.fillColor(backgr_colors[currentSettings.backgroundColor],constrain(max_level, BACKGROUND_BRIGHTNESS, 255));
 }
 //****************************************************************************************
 // --- Эффект "VU-метр" (ОПТИМИЗИРОВАННЫЙ) ---
@@ -928,11 +968,11 @@ void spawnSparks(BandData* band_data) {
           
           // --- Расчет СКОРОСТИ (комбинированный) ---
           uint8_t magnitude = constrain(band_data[i].level,127,255);
-          //float base_speed = base_speed_by_channel[i];
-          //float speed_bonus = (magnitude / 255.0f) * 0.5f;  
-          //sparks[j].speed = base_speed + speed_bonus;
+          float base_speed = base_speed_by_channel[i];
+          float speed_bonus = (magnitude / 255.0f) * 0.1f;  
+          sparks[j].speed = base_speed + speed_bonus;
           //sparks[j].speed = base_speed_by_channel[i];
-          sparks[j].speed = (magnitude / 255.0f) * 0.8f;//0.5f;
+          //sparks[j].speed = (magnitude / 255.0f) * 0.8f;//0.5f;
           // --- КОНЕЦ БЛОКА ---
 
           break; 
