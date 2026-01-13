@@ -31,7 +31,8 @@ SavaGFX_OLED gfx(&oled);                                   // объявляем
 #define BACKGROUND_BRIGHTNESS   40                         // яркость фона
 #define TIMERAUTOCYCLE          3000                       // таймер переключения эффектов в мСек
 #define IDLE_TIMEOUT            20000                      // Время отсутствия звука в мСек
-#define GATE_TON_MS             200                        // Задержка включения канала (фильтр импульсов)
+#define ENABLE_GATE_FILTER                                 // Включить Gate фильтр (закомментировать для версии без микрофона)
+#define GATE_TON_MS             500                        // Задержка включения канала (фильтр импульсов)
 #define GATE_TOF_MS             350                        // Задержка выключения канала (удержание)
 #define SPEECH_DETECT_TIMEOUT   1000                       // Задержка детекции речи (мс)
 #define SPEECH_HF_THRESHOLD     50                         // Порог высоких каналов (5-7), речь < 50
@@ -453,43 +454,59 @@ void IRAM_ATTR sampling_timer_callback(void* arg) {
 // --- Функция Setup для настроек ---
 //****************************************************************************************
 void setup() {
+  // --- Инициализация OLED (I2C автоматически настраивается) ---
+  oled.init(800000, 21, 22);                      // 800kHz, SDA=21, SCL=22 (стандарт ESP32)
+  oled.clear();                                   // Очищаем экран
   
+  oled.font(SF_Font_P8);
+  oled.cursor(0, 0, StrLeft);
   // --- Инициализация кнопок через SavaButton ---
   btn_minus(BTN_MINUS_PIN, PLUS);                 // GPIO13, подтяжка к плюсу
   btn_ok(BTN_OK_PIN, PLUS);                       // GPIO15, подтяжка к плюсу
   btn_plus(BTN_PLUS_PIN, PLUS);                   // GPIO5, подтяжка к плюсу
   btn_ok.setLong(1000);                           // Длинное нажатие 1000 мс
+  oled.print("Настройка кнопок...");              // Текст заставки
+  oled.drawPrint();                               // Обновляем дисплей
+  oled.display();                                 // Отправляем на экран
+  delay(1000);
 
+    // --- Инициализация LED ленты ---
+  oled.cursor(0, 9, StrLeft);                    // Позиция для текста
+  strip.begin(NUM_LEDS, LED_PIN);                 // Инициализация ленты
+  oled.print("Подключаем LED ленту...");          // Текст заставки
+  strip.setGammaCorrection(true);                 // Включаем гамма-коррекцию
+  strip.clear();                                  //  
+  oled.drawPrint();
+  oled.display();
+  delay(1000);
+
+  // --- ИНИЦИАЛИЗАЦИЯ АЦП ---
   analogReadResolution(12);                       // Разрешение АЦП 12 бит  
   analogSetAttenuation(ADC_11db);                 // Аттенюатор для полного диапазона 0-3.3В
+  oled.cursor(0, 18, StrLeft);                    // Позиция для текста
+  oled.print("Настройка АЦП...");                 // Текст заставки
+  oled.drawPrint();                               // Обновляем дисплей
+  oled.display();                                 // Отправляем на экран
+  delay(1000);
+  
   Serial.begin(115200);                           // Инициализация Serial
 
   // --- ИНИЦИАЛИЗАЦИЯ И ЗАГРУЗКА НАСТРОЕК ---
   EEPROM.begin(EEPROM_SIZE);                      // Инициализация EEPROM
+  oled.cursor(0, 27, StrLeft);                    // Позиция для текста            
+  oled.print("Подключение памяти...");               // Текст заставки
+  oled.drawPrint();                               // Обновляем дисплей     
+  oled.display();                                 // Отправляем на экран
+  delay(1000);
+
   loadSettings();                                 // Загрузка настроек из EEPROM
-
-  Serial.print("Sensitivity: "); Serial.print(currentSettings.sensitivity); Serial.println("%");
-
-  // --- Инициализация OLED (I2C автоматически настраивается) ---
-  oled.init(800000, 21, 22);                      // 800kHz, SDA=21, SCL=22 (стандарт ESP32)
-  oled.clear();
-
-  // --- Заставка SAVA ---
-  oled.font(SF_Font_x2_P16);                      // Крупный шрифт (16px недостаточно для scale(4), но покажем)
-  oled.cursor(0, 22, StrCenter);                  // Позиция для текста
-  oled.drawMode(ADD_UP);                          // Режим наложения
-  oled.print("SAVA");                             // Текст заставки
-  oled.drawPrint();                               // ОБЯЗАТЕЛЬНО после print()
-  oled.rectR(0, 0, 127, 63, 3, REPLACE);          // Прямоугольник со скруглением r=3
-  oled.display();                                 // Обновляем дисплей
-  //delay(3000);                                    // Задержка 3 секунды
-  //oled.clear();                                   // Очищаем экран
-
-  // --- Инициализация LED ленты ---
-  if (!strip.begin(NUM_LEDS, LED_PIN)) {          // Инициализация ленты
-    while (true);                                 // Останавливаемся здесь, если лента не подключена
-  }
-  strip.setGammaCorrection(true);                 // Включаем гамма-коррекцию  
+  Serial.print("Sensitivity: "); Serial.print(currentSettings.sensitivity); Serial.println("%");  // Вывод в Serial для отладки
+  oled.cursor(0, 36, StrLeft);                    // Позиция для текста 
+  oled.print("Загрузка настроек...");                // Текст заставки
+  oled.drawPrint();                               // Обновляем дисплей
+  oled.display();                                 // Отправляем на экран
+  delay(1500);   
+  
   // --- Инициализация библиотеки esp-dsp ---
   // Выполняется один раз для подготовки внутренних таблиц, что ускоряет FFT.
   esp_err_t ret = dsps_fft2r_init_fc32(NULL, CONFIG_DSP_MAX_FFT_SIZE);      // Инициализация FFT
@@ -497,16 +514,41 @@ void setup() {
     Serial.println("FFT initialization failed!");
     return;
   }
-    //создаем очередь
-    //peaksQueue = xQueueCreate(1, sizeof(float) * NUM_BANDS);
+  oled.cursor(0, 45, StrLeft);
+  oled.print("Подключаем Фурье(FFT)...");                             // Текст заставки
+  oled.drawPrint();
+  oled.display();
+  delay(1500);
+  // --- ИНИЦИАЛИЗАЦИЯ ОЧЕРЕДИ ---
     peaksQueue = xQueueCreate(1, sizeof(BandData) * NUM_BANDS);             // очередь для передачи данных между ядрами
 
     // Создаем и запускаем задачу для FFT на ядре 0
     xTaskCreatePinnedToCore(                                                // Создание задачи
         TaskFFTcode, "TaskFFT", 32768, NULL, 10, NULL, 0);                  // Запуск на ядре 0
-
-    Serial.println("Setup complete.");
-  delay(3000);
+  
+  Serial.println("Setup complete.");
+  oled.cursor(0, 54, StrCenter);
+  oled.print("Загрузка завершина!");                             // Текст заставки
+  oled.drawPrint();
+  oled.display();
+  delay(1500);
+    // --- Заставка SAVA ---
+  oled.clear(); 
+  oled.rectR(0, 0, 127, 63, 3, REPLACE); // Прямоугольник со скруглением r=3
+  oled.font(SF_Font_x2_P16);                      // Крупный шрифт (16px недостаточно для scale(4), но покажем)
+  oled.cursor(0, 22, StrCenter);                  // Позиция для текста
+  oled.drawMode(ADD_UP);                          // Режим наложения
+  oled.print("SavaLab");                             // Текст заставки
+  oled.drawPrint();
+  oled.font(SF_Font_P8);
+  oled.cursor(0, 39, StrCenter);
+  oled.print("Эксклюзивно");
+  oled.drawPrint();
+  oled.cursor(0, 48, StrCenter);
+  oled.print("для А.С.Бердюгина");
+  oled.drawPrint();
+  oled.display();
+  delay(2000);
   oled.clear();                                                             // Очищаем экран
   //disableCore0WDT();
   //disableCore1WDT();
@@ -532,9 +574,11 @@ void TaskFFTcode(void * pvParameters) {
     static uint8_t last_level[NUM_BANDS] = {0};
 
     // === GATE ФИЛЬТР (TON/TOF для каждого канала) ===
+    #ifdef ENABLE_GATE_FILTER
     static SavaTime gateTimerTON[NUM_BANDS];
     static SavaTime gateTimerTOF[NUM_BANDS];
     static bool channelGateActive[NUM_BANDS] = {false};
+    #endif
 
     // === ДЕТЕКТОР РЕЧИ ===
     static SavaTime speechTimer;
@@ -639,7 +683,29 @@ void TaskFFTcode(void * pvParameters) {
             }
 
             // ============================================================
-            // ШАГ 8: НОРМАЛИЗАЦИЯ В 0-255 С УЧЁТОМ ЧУВСТВИТЕЛЬНОСТИ
+            // ШАГ 8: GATE ФИЛЬТР (TON/TOF для подавления импульсов)
+            // ============================================================
+            #ifdef ENABLE_GATE_FILTER
+            for (int i = 0; i < NUM_BANDS; i++) {
+                // TON: Включаем gate если сигнал > MIN_AMPLITUDE держится GATE_TON_MS
+                if (gateTimerTON[i].TON(GATE_TON_MS, (peaks[i] > MIN_AMPLITUDE[i]))) {
+                    channelGateActive[i] = true;
+                }
+
+                // TOF: Выключаем gate если сигнал <= MIN_AMPLITUDE держится GATE_TOF_MS
+                if (!gateTimerTOF[i].TOF(GATE_TOF_MS, (peaks[i] > MIN_AMPLITUDE[i]))) {
+                    channelGateActive[i] = false;
+                }
+
+                // Если gate выключен, обнуляем сырой пик
+                if (!channelGateActive[i]) {
+                    peaks[i] = 0;
+                }
+            }
+            #endif
+
+            // ============================================================
+            // ШАГ 9: НОРМАЛИЗАЦИЯ В 0-255 С УЧЁТОМ ЧУВСТВИТЕЛЬНОСТИ
             // ============================================================
             float sensitivity_mult = (float)currentSettings.sensitivity / 100.0f;
 
@@ -655,25 +721,6 @@ void TaskFFTcode(void * pvParameters) {
                 if (mapped_value < 0.0f) mapped_value = 0.0f;
 
                 uint8_t current_level = (uint8_t)mapped_value;
-
-                // ============================================================
-                // ШАГ 9: GATE ФИЛЬТР (TON/TOF для подавления импульсов)
-                // ============================================================
-
-                // TON: Включаем gate если уровень > 0 держится GATE_TON_MS
-                if (gateTimerTON[i].TON(GATE_TON_MS, (current_level > 0))) {
-                    channelGateActive[i] = true;
-                }
-
-                // TOF: Выключаем gate если уровень == 0 держится GATE_TOF_MS
-                if (!gateTimerTOF[i].TOF(GATE_TOF_MS, (current_level > 0))) {
-                    channelGateActive[i] = false;
-                }
-
-                // Если gate выключен, обнуляем выход
-                if (!channelGateActive[i]) {
-                    current_level = 0;
-                }
 
                 // ============================================================
                 // ШАГ 10: ДЕТЕКЦИЯ АТАКИ (резкий скачок уровня)
