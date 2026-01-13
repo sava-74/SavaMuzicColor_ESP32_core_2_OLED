@@ -701,7 +701,7 @@ void TaskFFTcode(void * pvParameters) {
                 if (!channelGateActive[i]) {
                     peaks[i] = 0;
                 }
-            }
+            } 
             #endif
 
             // ============================================================
