@@ -1,11 +1,12 @@
 /*
-//***********************************************************************
+#####################################################################
 // SavaMuzicColor_ESP32_core_2_OLED.ino
 // Версия 2.0.0
 // Автор: SavaLab
 // https://github.com/sava-74/SavaMuzicColor_ESP32_core_2_OLED.git
-//***********************************************************************
+######################################################################
 */
+
 #include "SavaOLED_ESP32.h"                                // библиотека дисплея OLED
 #include "SavaGFX_OLED.h"                                  // библиотека графики для OLED
 #include "Fonts/SF_Font_P8.h"                              // шрифт 8px
@@ -29,14 +30,14 @@ SavaGFX_OLED gfx(&oled);                                   // объявляем
 #define EEPROM_MAGIC_KEY        0x1A2E                     // секретный ключ востановления по дефолту памяти                          
 #define NUM_LEDS                100                        // кол-во светодиодов в ленте
 #define BACKGROUND_BRIGHTNESS   40                         // яркость фона
-#define TIMERAUTOCYCLE          3000                       // таймер переключения эффектов в мСек
+#define TIMERAUTOCYCLE          30000                       // таймер переключения эффектов в мСек
 #define IDLE_TIMEOUT            20000                      // Время отсутствия звука в мСек
 #define ENABLE_GATE_FILTER                                 // Включить Gate фильтр (закомментировать для версии без микрофона)
 #define GATE_TON_MS             500                        // Задержка включения канала (фильтр импульсов)
 #define GATE_TOF_MS             350                        // Задержка выключения канала (удержание)
 #define SPEECH_DETECT_TIMEOUT   1000                       // Задержка детекции речи (мс)
-#define SPEECH_HF_THRESHOLD     50                         // Порог высоких каналов (5-7), речь < 50
-#define SPEECH_LF_MIN           120                         // Минимальная активность низких каналов (0-4)
+#define SPEECH_HF_THRESHOLD     20                         // Порог высоких каналов (5-7), речь < 50
+#define SPEECH_LF_MIN           127                         // Минимальная активность низких каналов (0-4)
 SavaLED_ESP32 strip;
 //****************************************************************************************
 #define BTN_PLUS_PIN    5                                     // кнопка плюс
@@ -109,9 +110,7 @@ const int band_max_bin[8] = {3, 5, 8, 14, 24, 42, 73, 127};  // Верхние �
 //****************************************************************************************
 // --- Настройки обработки FFT в ядре 0 ---
 //****************************************************************************************
-// Порог детекции атаки (резкий скачок уровня для детектора isNewPeak)
-// 25 = ~10% от максимума (255), оптимально для фильтрации шума
-#define ATTACK_THRESHOLD 25
+
 // =========================================================================
 // --- Структура для передачи обработанных данных между ядрами ---
 // =========================================================================
@@ -468,7 +467,7 @@ void setup() {
   oled.print("Настройка кнопок...");              // Текст заставки
   oled.drawPrint();                               // Обновляем дисплей
   oled.display();                                 // Отправляем на экран
-  delay(1000);
+  delay(500);
 
     // --- Инициализация LED ленты ---
   oled.cursor(0, 9, StrLeft);                    // Позиция для текста
@@ -478,7 +477,7 @@ void setup() {
   strip.clear();                                  //  
   oled.drawPrint();
   oled.display();
-  delay(1000);
+  delay(500);
 
   // --- ИНИЦИАЛИЗАЦИЯ АЦП ---
   analogReadResolution(12);                       // Разрешение АЦП 12 бит  
@@ -487,7 +486,7 @@ void setup() {
   oled.print("Настройка АЦП...");                 // Текст заставки
   oled.drawPrint();                               // Обновляем дисплей
   oled.display();                                 // Отправляем на экран
-  delay(1000);
+  delay(500);
   
   Serial.begin(115200);                           // Инициализация Serial
 
@@ -497,7 +496,7 @@ void setup() {
   oled.print("Подключение памяти...");               // Текст заставки
   oled.drawPrint();                               // Обновляем дисплей     
   oled.display();                                 // Отправляем на экран
-  delay(1000);
+  delay(500);
 
   loadSettings();                                 // Загрузка настроек из EEPROM
   Serial.print("Sensitivity: "); Serial.print(currentSettings.sensitivity); Serial.println("%");  // Вывод в Serial для отладки
@@ -505,7 +504,7 @@ void setup() {
   oled.print("Загрузка настроек...");                // Текст заставки
   oled.drawPrint();                               // Обновляем дисплей
   oled.display();                                 // Отправляем на экран
-  delay(1500);   
+  delay(500);   
   
   // --- Инициализация библиотеки esp-dsp ---
   // Выполняется один раз для подготовки внутренних таблиц, что ускоряет FFT.
@@ -518,7 +517,7 @@ void setup() {
   oled.print("Подключаем Фурье(FFT)...");                             // Текст заставки
   oled.drawPrint();
   oled.display();
-  delay(1500);
+  delay(500);
   // --- ИНИЦИАЛИЗАЦИЯ ОЧЕРЕДИ ---
     peaksQueue = xQueueCreate(1, sizeof(BandData) * NUM_BANDS);             // очередь для передачи данных между ядрами
 
@@ -531,7 +530,7 @@ void setup() {
   oled.print("Загрузка завершина!");                             // Текст заставки
   oled.drawPrint();
   oled.display();
-  delay(1500);
+  delay(500);
     // --- Заставка SAVA ---
   oled.clear(); 
   oled.rectR(0, 0, 127, 63, 3, REPLACE); // Прямоугольник со скруглением r=3
@@ -548,7 +547,7 @@ void setup() {
   oled.print("для А.С.Бердюгина");
   oled.drawPrint();
   oled.display();
-  delay(2000);
+  delay(500);
   oled.clear();                                                             // Очищаем экран
   //disableCore0WDT();
   //disableCore1WDT();
@@ -573,6 +572,10 @@ void TaskFFTcode(void * pvParameters) {
     // === ДЕТЕКТОРЫ АТАКИ ===
     static uint8_t last_level[NUM_BANDS] = {0};
 
+    // Порог детекции атаки (резкий скачок уровня для детектора isNewPeak)
+    // 25 = ~10% от максимума (255), оптимально для фильтрации шума
+    #define ATTACK_THRESHOLD 25
+
     // === GATE ФИЛЬТР (TON/TOF для каждого канала) ===
     #ifdef ENABLE_GATE_FILTER
     static SavaTime gateTimerTON[NUM_BANDS];
@@ -582,6 +585,7 @@ void TaskFFTcode(void * pvParameters) {
 
     // === ДЕТЕКТОР РЕЧИ ===
     static SavaTime speechTimer;
+    
 
     // === МАССИВ ДЛЯ ОТПРАВКИ В ОЧЕРЕДЬ ===
     BandData band_data[NUM_BANDS];
@@ -596,25 +600,27 @@ void TaskFFTcode(void * pvParameters) {
 
     // === КОНСТАНТЫ FFT ===
     const int start_bin_freq = 2;                                         // 150 Гц / 95.3 Гц/бин ≈ 1.57 → 2
-    const float MIN_AMPLITUDE[] = {
-                                  6000.0f, //8600.0f, 
-                                  6000.0f, //8100.0f, 
-                                  2000.0f, //5000.0f, 
-                                  2200.0f, //5000.0f,
-                                  2000.0f, //2000.0f,
-                                  1000.0f, //8000.0f,
-                                  2000.0f,
-                                  600.0f};                                   
-    const float MAX_AMPLITUDE[] = {
-                                  45000.0f, 
-                                  40000.0f, 
-                                  40000.0f, 
-                                  40000.0f,
-                                  30000.0f,
-                                  40000.0f,
-                                  40000.0f,
-                                  15000.0f};                               
+    const uint32_t MIN_AMPLITUDE[] = {
+                                  6000,//.0f, //8600.0f, 
+                                  6000,//.0f, //8100.0f, 
+                                  2000, //5000.0f, 
+                                  2200, //5000.0f,
+                                  2000, //2000.0f,
+                                  1000, //8000.0f,
+                                  2000,
+                                  600,};//.0f};                                   
+    const uint32_t MAX_AMPLITUDE[] = {
+                                  45000,//.0f, 
+                                  40000,//.0f, 
+                                  40000,//.0f, 
+                                  40000,//.0f,
+                                  30000,//.0f,
+                                  40000,//.0f,
+                                  40000,//.0f,
+                                  15000,};//.0f};                               
 
+    uint32_t temp_int_fft_buffer[SAMPLES]; // Временный буфер для преобразования типов (если нужно)
+    static float gate_sred;
     // === ГЛАВНЫЙ ЦИКЛ ===
     for (;;) {
         if (samplesReadyFlag) {
@@ -661,73 +667,90 @@ void TaskFFTcode(void * pvParameters) {
             // ШАГ 6: ВЫЧИСЛЕНИЕ МАГНИТУДЫ (амплитуды спектра)
             // ============================================================
             for (int i = 0; i < SAMPLES / 2; i++) {
-                float re = temp_fft_buffer[i * 2];
-                float im = temp_fft_buffer[i * 2 + 1];
-                temp_fft_buffer[i] = sqrtf(re * re + im * im);
+                uint32_t re = (uint32_t)temp_fft_buffer[i * 2];
+                uint32_t im = (uint32_t)temp_fft_buffer[i * 2 + 1];
+                temp_int_fft_buffer[i] = sqrtf(re * re + im * im);
+                //Serial.print("Бин "); Serial.print(i); Serial.print(": "); Serial.println(temp_int_fft_buffer[i]);
             }
 
             // ============================================================
             // ШАГ 7: ПОИСК ПИКОВ ПО 8 ЧАСТОТНЫМ ДИАПАЗОНАМ
             // ============================================================
-            float peaks[NUM_BANDS] = {0};
+            uint32_t peaks[NUM_BANDS] = {0};
 
             for (int b = 0; b < NUM_BANDS; b++) {
                 int start_bin = (b == 0) ? start_bin_freq : (band_max_bin[b - 1] + 1);
                 int end_bin = band_max_bin[b];
 
                 for (int k = start_bin; k <= end_bin; k++) {
-                    if (temp_fft_buffer[k] > peaks[b]) {
-                        peaks[b] = temp_fft_buffer[k];
+                    if (temp_int_fft_buffer[k] > peaks[b]) {
+                        peaks[b] = temp_int_fft_buffer[k];
                     }
                 }
+              //Serial.print("Канал "); Serial.print(b); Serial.print(": "); Serial.println(peaks[b]);
             }
 
             // ============================================================
             // ШАГ 8: GATE ФИЛЬТР (TON/TOF для подавления импульсов)
             // ============================================================
             #ifdef ENABLE_GATE_FILTER
-            for (int i = 0; i < NUM_BANDS; i++) {
+            
+              for (int i = 0; i < NUM_BANDS; i++) {
                 // TON: Включаем gate если сигнал > MIN_AMPLITUDE держится GATE_TON_MS
                 if (gateTimerTON[i].TON(GATE_TON_MS, (peaks[i] > MIN_AMPLITUDE[i]))) {
                     channelGateActive[i] = true;
+                    //Serial.print("канал "); Serial.print(i); Serial.print(" пик = "); Serial.println(channelGateActive[i]);
                 }
-
+                
                 // TOF: Выключаем gate если сигнал <= MIN_AMPLITUDE держится GATE_TOF_MS
                 if (!gateTimerTOF[i].TOF(GATE_TOF_MS, (peaks[i] > MIN_AMPLITUDE[i]))) {
                     channelGateActive[i] = false;
+                    //Serial.print("TOF канал "); Serial.print(i); Serial.print(" пик = "); Serial.println(channelGateActive[i]);
                 }
-
+                
                 // Если gate выключен, обнуляем сырой пик
-                if (!channelGateActive[i]) {
+                if (/*!channelGateActive[i] && */gate_sred < 0.35) {
+                  //Serial.print("ИТОГ канал "); Serial.print(i); Serial.print(" пик = "); Serial.println(channelGateActive[i]);
                     peaks[i] = 0;
                 }
-            } 
+              } 
+              
+              uint8_t gate_count = 0;
+              for (int i = 0; i < NUM_BANDS; i++) {
+                if(channelGateActive[i]) gate_count++;
+              }
+              gate_sred = (float)gate_count / 8.0f;            
+              //Serial.print("среднее - "); Serial.println(gate_sred);
             #endif
 
             // ============================================================
             // ШАГ 9: НОРМАЛИЗАЦИЯ В 0-255 С УЧЁТОМ ЧУВСТВИТЕЛЬНОСТИ
             // ============================================================
-            float sensitivity_mult = (float)currentSettings.sensitivity / 100.0f;
+            uint8_t sensitivity_mult = currentSettings.sensitivity / 100; // Множитель чувствительности от 0.1 до 1.0
 
             for (int i = 0; i < NUM_BANDS; i++) {
                 // Масштабирование в 0-255
-                float mapped_value = (peaks[i] - MIN_AMPLITUDE[i]) / (MAX_AMPLITUDE[i] - MIN_AMPLITUDE[i]) * 255.0f;
+                uint8_t mapped_value = constrain((map(peaks[i], MIN_AMPLITUDE[i], MAX_AMPLITUDE[i], 0, 255)), 0, 255);
 
                 // Применяем чувствительность
-                mapped_value *= sensitivity_mult;
+                //mapped_value *= sensitivity_mult;
 
                 // Ограничение 0-255
-                if (mapped_value > 255.0f) mapped_value = 255.0f;
-                if (mapped_value < 0.0f) mapped_value = 0.0f;
-
-                uint8_t current_level = (uint8_t)mapped_value;
+                //mapped_value = constrain(mapped_value, 0, 255);
+                //if (mapped_value > 255.0f) mapped_value = 255.0f;
+                //if (mapped_value < 0.0f) mapped_value = 0.0f;
+                //Serial.print("Канал_Нормализ "); Serial.print(i); Serial.print(": "); Serial.println(mapped_value);
+                //uint8_t current_level = (uint8_t)mapped_value;
 
                 // ============================================================
                 // ШАГ 10: ДЕТЕКЦИЯ АТАКИ (резкий скачок уровня)
                 // ============================================================
-                band_data[i].isNewPeak = (current_level > last_level[i] + ATTACK_THRESHOLD);
+                /*band_data[i].isNewPeak = (current_level > last_level[i] + ATTACK_THRESHOLD);
                 band_data[i].level = current_level;
-                last_level[i] = current_level;
+                last_level[i] = current_level;*/
+                band_data[i].isNewPeak = (mapped_value > last_level[i] + ATTACK_THRESHOLD);
+                band_data[i].level = mapped_value;
+                last_level[i] = mapped_value;
             }
 
             // ============================================================
@@ -739,13 +762,15 @@ void TaskFFTcode(void * pvParameters) {
 
             // Сумма низких/средних каналов (0-4)
             uint16_t low_sum = (band_data[0].level + band_data[1].level + band_data[2].level + band_data[3].level + band_data[4].level) / 5;
-            Serial.print("Низкие_sum: = ");Serial.println(low_sum);
-            Serial.print("высокие_sum: = ");Serial.println(high_sum);
+            //Serial.print("Низкие_sum: = ");Serial.println(low_sum);
+            //Serial.print("высокие_sum: = ");Serial.println(high_sum);
             // Речь = высокие почти нулевые И есть активность в низких
+            static uint16_t cooont;
             bool isSpeech = false;
             if((high_sum < SPEECH_HF_THRESHOLD) && (low_sum > SPEECH_LF_MIN)) {
               isSpeech = true;
-              Serial.print("детектор сработал");
+              
+              //Serial.print(cooont++);Serial.println(" - детектор сработал");
 
               }
             else isSpeech = false;
